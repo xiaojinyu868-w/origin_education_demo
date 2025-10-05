@@ -1,0 +1,389 @@
+﻿from __future__ import annotations
+
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import selectinload
+from sqlmodel import Session, select
+
+from .database import get_session, init_db
+from .models import (
+    ClassEnrollment,
+    Classroom,
+    Exam,
+    PracticeAssignment,
+    PracticeStatus,
+    Question,
+    Response,
+    Student,
+    Submission,
+    Teacher,
+)
+from .schemas import (
+    AnalyticsFilter,
+    AnalyticsSummary,
+    ClassroomCreate,
+    ClassroomRead,
+    EnrollmentCreate,
+    EnrollmentRead,
+    ExamCreate,
+    ExamRead,
+    ManualScoreUpdate,
+    MistakeRead,
+    OCRResult,
+    PracticeAssignmentCreate,
+    PracticeAssignmentRead,
+    PracticeCompletionUpdate,
+    ResponseRead,
+    StudentCreate,
+    StudentRead,
+    SubmissionCreate,
+    SubmissionDetail,
+    SubmissionProcessingResult,
+    SubmissionRead,
+    TeacherCreate,
+    TeacherRead,
+)
+from .services.analytics import build_analytics
+from .services.grading import auto_grade_submission
+from .services.mistakes import get_student_mistakes
+from .services.ocr import OCRProcessingError, extract_question_rows
+from .services.practice import generate_practice_assignment
+from .sample_data import ensure_classroom, ensure_exam, ensure_students, ensure_teacher
+
+
+app = FastAPI(title="AI-Assisted Exam Analytics Platform")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    init_db()
+
+
+def _get_db() -> Session:
+    with get_session() as session:
+        yield session
+
+
+@app.post("/students", response_model=StudentRead)
+def create_student(payload: StudentCreate, session: Session = Depends(_get_db)) -> Student:
+    student = Student(**payload.model_dump())
+    session.add(student)
+    session.commit()
+    session.refresh(student)
+    return student
+
+
+@app.get("/students", response_model=List[StudentRead])
+def list_students(session: Session = Depends(_get_db)) -> List[Student]:
+    stmt = select(Student)
+    return session.exec(stmt).all()
+
+
+@app.post("/teachers", response_model=TeacherRead)
+def create_teacher(payload: TeacherCreate, session: Session = Depends(_get_db)) -> Teacher:
+    teacher = Teacher(**payload.model_dump())
+    session.add(teacher)
+    session.commit()
+    session.refresh(teacher)
+    return teacher
+
+
+@app.get("/teachers", response_model=List[TeacherRead])
+def list_teachers(session: Session = Depends(_get_db)) -> List[Teacher]:
+    stmt = select(Teacher)
+    return session.exec(stmt).all()
+
+
+@app.post("/classrooms", response_model=ClassroomRead)
+def create_classroom(payload: ClassroomCreate, session: Session = Depends(_get_db)) -> Classroom:
+    classroom = Classroom(**payload.model_dump())
+    session.add(classroom)
+    session.commit()
+    session.refresh(classroom)
+    return classroom
+
+
+@app.get("/classrooms", response_model=List[ClassroomRead])
+def list_classrooms(session: Session = Depends(_get_db)) -> List[Classroom]:
+    stmt = select(Classroom)
+    return session.exec(stmt).all()
+
+
+@app.post("/enrollments", response_model=EnrollmentRead)
+def enroll_student(payload: EnrollmentCreate, session: Session = Depends(_get_db)) -> ClassEnrollment:
+    enrollment = ClassEnrollment(**payload.model_dump())
+    session.add(enrollment)
+    session.commit()
+    session.refresh(enrollment)
+    return enrollment
+
+
+@app.post("/exams", response_model=ExamRead)
+def create_exam(payload: ExamCreate, session: Session = Depends(_get_db)) -> Exam:
+    exam = Exam(**payload.model_dump(exclude={"questions"}))
+    session.add(exam)
+    session.flush()
+
+    for question_payload in payload.questions:
+        question = Question(exam_id=exam.id, **question_payload.model_dump())
+        session.add(question)
+
+    session.commit()
+    session.refresh(exam)
+    session.refresh(exam, attribute_names=["questions"])
+    return exam
+
+
+
+
+@app.get("/exams", response_model=List[ExamRead])
+def list_exams(session: Session = Depends(_get_db)) -> List[ExamRead]:
+    stmt = select(Exam)
+    exams = session.exec(stmt).all()
+    for exam in exams:
+        session.refresh(exam, attribute_names=["questions"])
+    return [ExamRead.model_validate(exam) for exam in exams]
+
+@app.get("/exams/{exam_id}", response_model=ExamRead)
+def get_exam(exam_id: int, session: Session = Depends(_get_db)) -> Exam:
+    exam = session.get(Exam, exam_id)
+    if not exam:
+        raise HTTPException(status_code=404, detail="未找到对应考试")
+    session.refresh(exam, attribute_names=["questions"])
+    return exam
+
+
+@app.post("/submissions", response_model=SubmissionDetail)
+def create_submission(payload: SubmissionCreate, session: Session = Depends(_get_db)) -> SubmissionDetail:
+    exam = session.get(Exam, payload.exam_id)
+    if not exam:
+        raise HTTPException(status_code=404, detail="未找到对应考试")
+    student = session.get(Student, payload.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="未找到对应学生")
+
+    submission = Submission(**payload.model_dump())
+    session.add(submission)
+    session.commit()
+    session.refresh(submission)
+    session.refresh(submission, attribute_names=["responses"])
+
+    return SubmissionDetail.model_validate(submission)
+
+
+
+
+@app.get("/submissions", response_model=List[SubmissionDetail])
+def list_submissions(
+    exam_id: Optional[int] = None,
+    student_id: Optional[int] = None,
+    session: Session = Depends(_get_db),
+) -> List[SubmissionDetail]:
+    stmt = select(Submission)
+    if exam_id is not None:
+        stmt = stmt.where(Submission.exam_id == exam_id)
+    if student_id is not None:
+        stmt = stmt.where(Submission.student_id == student_id)
+    stmt = stmt.order_by(Submission.submitted_at.desc())
+    submissions = session.exec(stmt).all()
+    for submission in submissions:
+        session.refresh(submission, attribute_names=["responses"])
+    return [SubmissionDetail.model_validate(item) for item in submissions]
+
+@app.get("/submissions/{submission_id}", response_model=SubmissionDetail)
+def get_submission(submission_id: int, session: Session = Depends(_get_db)) -> SubmissionDetail:
+    submission = session.get(Submission, submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="未找到该份提交记录")
+    session.refresh(submission, attribute_names=["responses"])
+    return SubmissionDetail.model_validate(submission)
+
+
+@app.post("/submissions/upload", response_model=SubmissionProcessingResult)
+async def upload_submission(
+    student_id: int = Form(...),
+    exam_id: int = Form(...),
+    image: UploadFile = File(...),
+    session: Session = Depends(_get_db),
+) -> SubmissionProcessingResult:
+    exam = session.get(Exam, exam_id)
+    if not exam:
+        raise HTTPException(status_code=404, detail="未找到对应考试")
+    student = session.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="未找到对应学生")
+
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="上传的图片为空")
+
+    submission = Submission(student_id=student_id, exam_id=exam_id)
+    session.add(submission)
+    session.commit()
+    session.refresh(submission)
+    session.refresh(exam, attribute_names=["questions"])
+    submission.exam = exam
+
+    try:
+        ocr_rows = extract_question_rows(image_bytes)
+    except OCRProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    submission.raw_ocr_payload = ocr_rows
+    session.add(submission)
+    session.commit()
+
+    responses, mistakes = auto_grade_submission(session, submission, ocr_rows)
+
+    session.refresh(submission)
+    session.refresh(submission, attribute_names=["responses"])
+
+    submission_schema = SubmissionRead.model_validate(submission)
+    responses_schema = [ResponseRead.model_validate(item) for item in responses]
+    mistakes_schema = [MistakeRead.model_validate(item) for item in mistakes]
+    ocr_schema = [OCRResult.model_validate(item) for item in ocr_rows]
+
+    return SubmissionProcessingResult(
+        submission=submission_schema,
+        responses=responses_schema,
+        mistakes=mistakes_schema,
+        ocr_rows=ocr_schema,
+    )
+
+
+@app.post("/responses/manual-score", response_model=ResponseRead)
+def update_manual_score(
+    payload: ManualScoreUpdate,
+    session: Session = Depends(_get_db),
+) -> ResponseRead:
+    response = session.get(Response, payload.response_id)
+    if response is None:
+        raise HTTPException(status_code=404, detail="未找到作答记录")
+
+    response.score = payload.new_score
+    response.comments = payload.new_comment
+    if payload.override_annotation:
+        response.teacher_annotation = payload.override_annotation
+
+    session.add(response)
+    session.commit()
+    session.refresh(response)
+
+    submission = session.get(Submission, response.submission_id)
+    if submission is not None:
+        session.refresh(submission, attribute_names=["responses"])
+        scored = [item.score or 0.0 for item in submission.responses if item.score is not None]
+        submission.total_score = sum(scored) if scored else submission.total_score
+        session.add(submission)
+        session.commit()
+
+    return ResponseRead.model_validate(response)
+
+
+@app.get("/students/{student_id}/mistakes", response_model=List[MistakeRead])
+def list_student_mistakes(student_id: int, session: Session = Depends(_get_db)) -> List[MistakeRead]:
+    mistakes = get_student_mistakes(session, student_id)
+    return [MistakeRead.model_validate(item) for item in mistakes]
+
+
+@app.post("/practice", response_model=PracticeAssignmentRead)
+def create_practice_assignment_endpoint(
+    payload: PracticeAssignmentCreate,
+    session: Session = Depends(_get_db),
+) -> PracticeAssignmentRead:
+    try:
+        assignment = generate_practice_assignment(
+            session,
+            student_id=payload.student_id,
+            target_date=payload.target_date,
+            knowledge_filters=payload.knowledge_filters,
+            max_items=payload.max_items,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session.refresh(assignment, attribute_names=["items"])
+    return PracticeAssignmentRead.model_validate(assignment)
+
+
+
+
+@app.get("/practice", response_model=List[PracticeAssignmentRead])
+def list_practice_assignments(
+    student_id: Optional[int] = None,
+    session: Session = Depends(_get_db),
+) -> List[PracticeAssignmentRead]:
+    stmt = select(PracticeAssignment).options(selectinload(PracticeAssignment.items))
+    if student_id is not None:
+        stmt = stmt.where(PracticeAssignment.student_id == student_id)
+    stmt = stmt.order_by(PracticeAssignment.scheduled_for.desc())
+    assignments = session.exec(stmt).all()
+    for assignment in assignments:
+        session.refresh(assignment, attribute_names=["items"])
+    return [PracticeAssignmentRead.model_validate(item) for item in assignments]
+
+
+@app.post("/practice/complete", response_model=PracticeAssignmentRead)
+def update_practice_completion(
+    payload: PracticeCompletionUpdate,
+    session: Session = Depends(_get_db),
+) -> PracticeAssignmentRead:
+    assignment = session.get(PracticeAssignment, payload.assignment_id)
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="未找到练习任务")
+
+    assignment.status = PracticeStatus.completed if payload.completed else PracticeStatus.assigned
+    session.add(assignment)
+    session.commit()
+    session.refresh(assignment, attribute_names=["items"])
+    return PracticeAssignmentRead.model_validate(assignment)
+
+
+@app.post("/analytics", response_model=AnalyticsSummary)
+def analytics_summary(payload: AnalyticsFilter, session: Session = Depends(_get_db)) -> AnalyticsSummary:
+    return build_analytics(session, payload)
+
+
+
+
+@app.post("/bootstrap/demo")
+def bootstrap_demo(session: Session = Depends(_get_db)):
+    """初始化一份演示数据，便于测试前端流程。"""
+
+    teacher = ensure_teacher(session, "演示教师", "demo.teacher@example.com")
+    classroom = ensure_classroom(session, teacher, "九年级一班（演示）")
+    students = ensure_students(session, classroom)
+    exam = ensure_exam(session, teacher, classroom)
+
+    return {
+        "message": "演示数据已准备就绪",
+        "teacher_id": teacher.id,
+        "classroom_id": classroom.id,
+        "student_ids": [student.id for student in students],
+        "exam_id": exam.id,
+    }
+
+@app.get("/practice/{assignment_id}/pdf")
+def download_practice_pdf(assignment_id: int, session: Session = Depends(_get_db)):
+    assignment = session.get(PracticeAssignment, assignment_id)
+    if assignment is None or not assignment.generated_pdf_path:
+        raise HTTPException(status_code=404, detail="尚未生成对应的练习卷 PDF")
+    pdf_path = Path(assignment.generated_pdf_path)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF 文件不存在或已被删除")
+    return FileResponse(str(pdf_path), filename=pdf_path.name)
+
+
+

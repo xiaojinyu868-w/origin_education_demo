@@ -1,0 +1,252 @@
+﻿from __future__ import annotations
+
+from datetime import date, datetime
+from enum import Enum
+from typing import Optional
+
+from sqlalchemy import Column, JSON
+from sqlalchemy.orm import relationship
+from sqlmodel import Field, Relationship, SQLModel
+
+
+class QuestionType(str, Enum):
+    multiple_choice = "multiple_choice"
+    fill_in_blank = "fill_in_blank"
+    subjective = "subjective"
+
+
+class SubmissionStatus(str, Enum):
+    pending = "pending"
+    graded = "graded"
+    needs_review = "needs_review"
+
+
+class PracticeStatus(str, Enum):
+    scheduled = "scheduled"
+    assigned = "assigned"
+    completed = "completed"
+
+
+class Student(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    email: Optional[str] = Field(default=None, index=True)
+    grade_level: Optional[str] = None
+
+    enrollments: list["ClassEnrollment"] = Relationship(
+        back_populates="student",
+        sa_relationship=relationship("ClassEnrollment", back_populates="student"),
+    )
+    submissions: list["Submission"] = Relationship(
+        back_populates="student",
+        sa_relationship=relationship("Submission", back_populates="student"),
+    )
+    mistake_sets: list["Mistake"] = Relationship(
+        back_populates="student",
+        sa_relationship=relationship("Mistake", back_populates="student"),
+    )
+    practice_assignments: list["PracticeAssignment"] = Relationship(
+        back_populates="student",
+        sa_relationship=relationship("PracticeAssignment", back_populates="student"),
+    )
+
+
+class Teacher(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    email: Optional[str] = Field(default=None, index=True)
+
+    classes: list["Classroom"] = Relationship(
+        back_populates="teacher",
+        sa_relationship=relationship("Classroom", back_populates="teacher"),
+    )
+    exams: list["Exam"] = Relationship(
+        back_populates="teacher",
+        sa_relationship=relationship("Exam", back_populates="teacher"),
+    )
+
+
+class Classroom(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    grade_level: Optional[str] = None
+    teacher_id: int = Field(foreign_key="teacher.id")
+
+    teacher: Optional["Teacher"] = Relationship(
+        back_populates="classes",
+        sa_relationship=relationship("Teacher", back_populates="classes"),
+    )
+    enrollments: list["ClassEnrollment"] = Relationship(
+        back_populates="classroom",
+        sa_relationship=relationship("ClassEnrollment", back_populates="classroom"),
+    )
+
+
+class ClassEnrollment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    classroom_id: int = Field(foreign_key="classroom.id")
+    student_id: int = Field(foreign_key="student.id")
+
+    classroom: Optional["Classroom"] = Relationship(
+        back_populates="enrollments",
+        sa_relationship=relationship("Classroom", back_populates="enrollments"),
+    )
+    student: Optional["Student"] = Relationship(
+        back_populates="enrollments",
+        sa_relationship=relationship("Student", back_populates="enrollments"),
+    )
+
+
+class Exam(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str
+    subject: Optional[str] = Field(default=None, index=True)
+    scheduled_date: Optional[date] = None
+    teacher_id: int = Field(foreign_key="teacher.id")
+    classroom_id: Optional[int] = Field(default=None, foreign_key="classroom.id")
+    answer_key_version: int = Field(default=1)
+
+    teacher: Optional["Teacher"] = Relationship(
+        back_populates="exams",
+        sa_relationship=relationship("Teacher", back_populates="exams"),
+    )
+    questions: list["Question"] = Relationship(
+        back_populates="exam",
+        sa_relationship=relationship("Question", back_populates="exam"),
+    )
+    submissions: list["Submission"] = Relationship(
+        back_populates="exam",
+        sa_relationship=relationship("Submission", back_populates="exam"),
+    )
+
+
+class Question(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    exam_id: int = Field(foreign_key="exam.id")
+    number: str = Field(index=True)
+    type: QuestionType = Field(default=QuestionType.multiple_choice, index=True)
+    prompt: Optional[str] = None
+    max_score: float = Field(default=1.0)
+    knowledge_tags: Optional[str] = Field(default=None, description="Comma separated tags")
+    answer_key: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    rubric: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    extra_metadata: Optional[dict] = Field(default=None, sa_column=Column("question_extra_metadata", JSON))
+
+    exam: Optional["Exam"] = Relationship(
+        back_populates="questions",
+        sa_relationship=relationship("Exam", back_populates="questions"),
+    )
+    responses: list["Response"] = Relationship(
+        back_populates="question",
+        sa_relationship=relationship("Response", back_populates="question"),
+    )
+
+
+class Submission(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="student.id")
+    exam_id: int = Field(foreign_key="exam.id")
+    submitted_at: datetime = Field(default_factory=datetime.utcnow)
+    total_score: Optional[float] = None
+    status: SubmissionStatus = Field(default=SubmissionStatus.pending, index=True)
+    raw_ocr_payload: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    extra_metadata: Optional[dict] = Field(default=None, sa_column=Column("submission_extra_metadata", JSON))
+
+    student: Optional["Student"] = Relationship(
+        back_populates="submissions",
+        sa_relationship=relationship("Student", back_populates="submissions"),
+    )
+    exam: Optional["Exam"] = Relationship(
+        back_populates="submissions",
+        sa_relationship=relationship("Exam", back_populates="submissions"),
+    )
+    responses: list["Response"] = Relationship(
+        back_populates="submission",
+        sa_relationship=relationship("Response", back_populates="submission"),
+    )
+
+
+class Response(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    submission_id: int = Field(foreign_key="submission.id")
+    question_id: int = Field(foreign_key="question.id")
+    student_answer: Optional[str] = None
+    normalized_answer: Optional[str] = None
+    score: Optional[float] = None
+    is_correct: Optional[bool] = None
+    ocr_confidence: Optional[float] = None
+    teacher_annotation: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    comments: Optional[str] = None
+
+    submission: Optional["Submission"] = Relationship(
+        back_populates="responses",
+        sa_relationship=relationship("Submission", back_populates="responses"),
+    )
+    question: Optional["Question"] = Relationship(
+        back_populates="responses",
+        sa_relationship=relationship("Question", back_populates="responses"),
+    )
+    mistake: Optional["Mistake"] = Relationship(
+        back_populates="response",
+        sa_relationship=relationship("Mistake", back_populates="response"),
+    )
+
+
+class Mistake(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="student.id")
+    response_id: int = Field(foreign_key="response.id")
+    question_id: int = Field(foreign_key="question.id")
+    knowledge_tags: Optional[str] = None
+    misconception_label: Optional[str] = None
+    resolution_notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_seen_at: datetime = Field(default_factory=datetime.utcnow)
+    times_practiced: int = Field(default=0)
+
+    student: Optional["Student"] = Relationship(
+        back_populates="mistake_sets",
+        sa_relationship=relationship("Student", back_populates="mistake_sets"),
+    )
+    response: Optional["Response"] = Relationship(
+        back_populates="mistake",
+        sa_relationship=relationship("Response", back_populates="mistake"),
+    )
+
+
+class PracticeAssignment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="student.id")
+    scheduled_for: date = Field(default_factory=date.today)
+    due_date: Optional[date] = None
+    status: PracticeStatus = Field(default=PracticeStatus.scheduled, index=True)
+    config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    generated_pdf_path: Optional[str] = None
+
+    student: Optional["Student"] = Relationship(
+        back_populates="practice_assignments",
+        sa_relationship=relationship("Student", back_populates="practice_assignments"),
+    )
+    items: list["PracticeItem"] = Relationship(
+        back_populates="assignment",
+        sa_relationship=relationship("PracticeItem", back_populates="assignment"),
+    )
+
+
+class PracticeItem(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    assignment_id: int = Field(foreign_key="practiceassignment.id")
+    question_id: int = Field(foreign_key="question.id")
+    source_mistake_id: Optional[int] = Field(default=None, foreign_key="mistake.id")
+    order_index: int = Field(default=0)
+
+    assignment: Optional["PracticeAssignment"] = Relationship(
+        back_populates="items",
+        sa_relationship=relationship("PracticeAssignment", back_populates="items"),
+    )
+    question: Optional["Question"] = Relationship(
+        sa_relationship=relationship("Question"),
+    )
+    source_mistake: Optional["Mistake"] = Relationship(
+        sa_relationship=relationship("Mistake"),
+    )

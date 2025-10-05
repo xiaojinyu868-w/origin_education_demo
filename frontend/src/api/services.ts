@@ -1,0 +1,135 @@
+﻿import type {
+  AnalyticsSummary,
+  Classroom,
+  Exam,
+  Mistake,
+  PracticeAssignment,
+  Student,
+  SubmissionDetail,
+  SubmissionProcessingResult,
+  Teacher,
+} from "../types";
+import { apiClient } from "./client";
+
+export const bootstrapDemo = async () => {
+  const { data } = await apiClient.post("/bootstrap/demo");
+  return data as {
+    message: string;
+    teacher_id: number;
+    classroom_id: number;
+    student_ids: number[];
+    exam_id: number;
+  };
+};
+
+export const fetchTeachers = async () => {
+  const { data } = await apiClient.get<Teacher[]>("/teachers");
+  return data;
+};
+
+export const createTeacher = async (payload: Pick<Teacher, "name" | "email">) => {
+  const { data } = await apiClient.post<Teacher>("/teachers", payload);
+  return data;
+};
+
+export const fetchClassrooms = async () => {
+  const { data } = await apiClient.get<Classroom[]>("/classrooms");
+  return data;
+};
+
+export const createClassroom = async (payload: {
+  name: string;
+  grade_level?: string;
+  teacher_id: number;
+}) => {
+  const { data } = await apiClient.post<Classroom>("/classrooms", payload);
+  return data;
+};
+
+export const fetchStudents = async () => {
+  const { data } = await apiClient.get<Student[]>("/students");
+  return data;
+};
+
+export const createStudent = async (payload: {
+  name: string;
+  email?: string;
+  grade_level?: string;
+}) => {
+  const { data } = await apiClient.post<Student>("/students", payload);
+  return data;
+};
+
+export const createEnrollment = async (payload: {
+  classroom_id: number;
+  student_id: number;
+}) => {
+  const { data } = await apiClient.post<{ id: number }>("/enrollments", payload);
+  return data;
+};
+
+export const createExam = async (payload: unknown) => {
+  const { data } = await apiClient.post("/exams", payload);
+  return data;
+};
+
+export const fetchExams = async () => {
+  const { data } = await apiClient.get<Exam[]>("/exams");
+  return data;
+};
+
+export const uploadSubmission = async (payload: FormData) => {
+  const { data } = await apiClient.post<SubmissionProcessingResult>("/submissions/upload", payload, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+};
+
+export const fetchSubmission = async (id: number) => {
+  const { data } = await apiClient.get<SubmissionDetail>(`/submissions/${id}`);
+  return data;
+};
+
+export const fetchSubmissions = async (params: { exam_id?: number; student_id?: number } = {}) => {
+  const { data } = await apiClient.get<SubmissionDetail[]>("/submissions", { params });
+  return data;
+};
+
+export const fetchStudentMistakes = async (studentId: number) => {
+  const { data } = await apiClient.get<Mistake[]>(`/students/${studentId}/mistakes`);
+  return data;
+};
+
+export const createPractice = async (payload: {
+  student_id: number;
+  target_date?: string;
+  knowledge_filters?: string[];
+  max_items?: number;
+}) => {
+  const { data } = await apiClient.post<PracticeAssignment>("/practice", payload);
+  return data;
+};
+
+export const completePractice = async (payload: {
+  assignment_id: number;
+  completed: boolean;
+}) => {
+  const { data } = await apiClient.post<PracticeAssignment>("/practice/complete", payload);
+  return data;
+};
+
+export const fetchPracticeAssignments = async (params: { student_id?: number } = {}) => {
+  const { data } = await apiClient.get<PracticeAssignment[]>("/practice", { params });
+  return data;
+};
+
+export const fetchAnalytics = async (payload: {
+  classroom_id?: number;
+  exam_id?: number;
+  knowledge_tags?: string[];
+  start_date?: string;
+  end_date?: string;
+}) => {
+  const { data } = await apiClient.post<AnalyticsSummary>("/analytics", payload);
+  return data;
+};
