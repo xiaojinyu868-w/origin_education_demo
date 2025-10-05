@@ -1,0 +1,10 @@
+# 排除 Python 虚拟环境
+.venv/
+env/
+venv/
+
+# 排除其他临时文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
