@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import math
 import statistics
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlmodel import Session, select
 
@@ -15,11 +16,28 @@ from ..models import (
     Submission,
     SubmissionStatus,
 )
+from .llm import LLMInvocationError, LLMNotConfiguredError, score_subjective_answer, summarize_submission
 
 
-class GradingResult(Tuple[List[Response], List[Mistake]]):
+@dataclass
+class PipelineStep:
+    name: str
+    status: str = "success"
+    detail: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, str]:
+        payload = {"name": self.name, "status": self.status}
+        if self.detail:
+            payload["detail"] = self.detail
+        return payload
+
+
+@dataclass
+class GradingArtifacts:
     responses: List[Response]
     mistakes: List[Mistake]
+    steps: List[PipelineStep] = field(default_factory=list)
+    ai_summary: Optional[str] = None
 
 
 def _normalize_option_text(text: str) -> str:
@@ -105,7 +123,7 @@ def auto_grade_submission(
     session: Session,
     submission: Submission,
     question_rows: List[Dict[str, Optional[str]]],
-) -> Tuple[List[Response], List[Mistake]]:
+) -> GradingArtifacts:
     question_map: Dict[str, Question] = {
         question.number: question for question in submission.exam.questions
     }
@@ -115,8 +133,9 @@ def auto_grade_submission(
 
     responses: List[Response] = []
     mistakes: List[Mistake] = []
-
+    steps: List[PipelineStep] = []
     total_scores: List[float] = []
+    summary_payload: List[Dict[str, Any]] = []
 
     for number, question in question_map.items():
         row = row_map.get(str(number))
@@ -130,6 +149,18 @@ def auto_grade_submission(
             student_answer=student_answer,
             ocr_confidence=confidence,
         )
+
+        applies_to_student = True
+        if question.target_student_ids:
+            applies_to_student = submission.student_id in set(question.target_student_ids)
+
+        if not applies_to_student:
+            response.applies_to_student = False
+            response.comments = "定向错题巩固题，系统已自动跳过评分。"
+            session.add(response)
+            session.flush()
+            responses.append(response)
+            continue
 
         if question.type == QuestionType.multiple_choice and student_answer:
             is_correct, score = _match_multiple_choice(student_answer, question)
@@ -147,6 +178,49 @@ def auto_grade_submission(
             if derived_score is not None:
                 response.score = derived_score
                 response.is_correct = math.isclose(derived_score, question.max_score)
+            elif question.type == QuestionType.subjective and student_answer:
+                try:
+                    llm_result = score_subjective_answer(
+                        question_prompt=question.prompt or "",
+                        student_answer=student_answer,
+                        max_score=question.max_score,
+                        rubric=question.rubric,
+                        reference_answer=question.answer_key,
+                    )
+                except LLMNotConfiguredError:
+                    steps.append(
+                        PipelineStep(
+                            name="AI 主观题评分",
+                            status="warning",
+                            detail="未配置访问密钥，保留待人工确认状态。",
+                        ),
+                    )
+                    response.score = None
+                    response.is_correct = None
+                    submission.status = SubmissionStatus.needs_review
+                except LLMInvocationError as exc:
+                    steps.append(
+                        PipelineStep(
+                            name="AI 主观题评分",
+                            status="error",
+                            detail=f"调用失败：{exc}",
+                        ),
+                    )
+                    response.score = None
+                    response.is_correct = None
+                    submission.status = SubmissionStatus.needs_review
+                else:
+                    response.score = llm_result["score"]
+                    response.comments = llm_result["explanation"]
+                    threshold = question.max_score * 0.8 if question.max_score else 0.0
+                    response.is_correct = response.score is not None and response.score >= threshold
+                    steps.append(
+                        PipelineStep(
+                            name="AI 主观题评分",
+                            status="success",
+                            detail=f"根据评分标准给出 {response.score} 分。",
+                        ),
+                    )
             else:
                 response.score = None
                 response.is_correct = None
@@ -166,6 +240,17 @@ def auto_grade_submission(
         if response.mistake:
             mistakes.append(response.mistake)
 
+        summary_payload.append(
+            {
+                "question_id": question.id,
+                "score": response.score,
+                "max_score": question.max_score,
+                "is_correct": response.is_correct,
+                "comments": response.comments,
+                "applies_to_student": response.applies_to_student,
+            },
+        )
+
     session.commit()
 
     if total_scores:
@@ -181,7 +266,37 @@ def auto_grade_submission(
     for response in responses:
         session.refresh(response)
 
-    return responses, mistakes
+    ai_summary: Optional[str] = None
+    try:
+        applicable_rows = [row for row in summary_payload if row.get("applies_to_student", True)]
+        ai_summary = summarize_submission(applicable_rows)
+    except LLMNotConfiguredError:
+        steps.append(
+            PipelineStep(
+                name="AI 批改总结",
+                status="warning",
+                detail="未配置访问密钥，未能生成自动总结。",
+            ),
+        )
+    except LLMInvocationError as exc:
+        steps.append(
+            PipelineStep(
+                name="AI 批改总结",
+                status="error",
+                detail=f"生成失败：{exc}",
+            ),
+        )
+    else:
+        if ai_summary:
+            steps.append(
+                PipelineStep(
+                    name="AI 批改总结",
+                    status="success",
+                    detail="已生成个性化点评。",
+                ),
+            )
+
+    return GradingArtifacts(responses=responses, mistakes=mistakes, steps=steps, ai_summary=ai_summary)
 
 
 def _sync_mistake_record(
@@ -190,6 +305,9 @@ def _sync_mistake_record(
     question: Question,
     response: Response,
 ) -> None:
+    if not response.applies_to_student:
+        return
+
     existing_stmt = select(Mistake).where(
         Mistake.student_id == submission.student_id,
         Mistake.question_id == question.id,
@@ -219,7 +337,7 @@ def _sync_mistake_record(
 
 
 def compute_submission_statistics(responses: List[Response]) -> Dict[str, float]:
-    scored = [response.score for response in responses if response.score is not None]
+    scored = [response.score for response in responses if response.score is not None and response.applies_to_student]
     if not scored:
         return {"average": 0.0, "median": 0.0, "max": 0.0}
 

@@ -75,6 +75,13 @@ def ensure_exam(session: Session, teacher: Teacher, classroom: Classroom) -> Exa
     session.commit()
     session.refresh(exam)
 
+    classroom_students = session.exec(
+        select(Student)
+        .join(ClassEnrollment, ClassEnrollment.student_id == Student.id)
+        .where(ClassEnrollment.classroom_id == classroom.id)
+    ).all()
+    targeted_student_id = classroom_students[0].id if classroom_students else None
+
     questions = [
         Question(
             exam_id=exam.id,
@@ -107,6 +114,7 @@ def ensure_exam(session: Session, teacher: Teacher, classroom: Classroom) -> Exa
             max_score=5,
             knowledge_tags="coordinate_geometry",
             rubric={"full_credit": "Correct formula and substitution", "partial_credit": "Formula only"},
+            target_student_ids=[targeted_student_id] if targeted_student_id else None,
         ),
     ]
 
@@ -124,3 +132,4 @@ if __name__ == "__main__":
         ensure_students(session, classroom)
         ensure_exam(session, teacher, classroom)
         print("Demo data ready.")
+

@@ -1,11 +1,11 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
@@ -21,10 +21,15 @@ from .models import (
     Student,
     Submission,
     Teacher,
+    TeacherFeedback,
 )
 from .schemas import (
     AnalyticsFilter,
     AnalyticsSummary,
+    AssistantChatRequest,
+    AssistantChatResponse,
+    LLMConfigStatus,
+    LLMConfigUpdate,
     ClassroomCreate,
     ClassroomRead,
     EnrollmentCreate,
@@ -34,6 +39,7 @@ from .schemas import (
     ManualScoreUpdate,
     MistakeRead,
     OCRResult,
+    ProcessingStep,
     PracticeAssignmentCreate,
     PracticeAssignmentRead,
     PracticeCompletionUpdate,
@@ -45,14 +51,29 @@ from .schemas import (
     SubmissionProcessingResult,
     SubmissionRead,
     TeacherCreate,
+    TeacherFeedbackCreate,
+    TeacherFeedbackRead,
     TeacherRead,
 )
 from .services.analytics import build_analytics
 from .services.grading import auto_grade_submission
+from .services.llm import (
+    LLMInvocationError,
+    LLMNotConfiguredError,
+    llm_available,
+    run_teacher_assistant,
+    set_llm_credentials,
+    stream_teacher_assistant,
+)
 from .services.mistakes import get_student_mistakes
-from .services.ocr import OCRProcessingError, extract_question_rows
+from .services.ocr import OCRProcessingError, run_ocr_pipeline
 from .services.practice import generate_practice_assignment
-from .sample_data import ensure_classroom, ensure_exam, ensure_students, ensure_teacher
+from uuid import uuid4
+
+FEEDBACK_STORAGE_DIR = (Path(__file__).resolve().parent / "generated" / "feedback")
+ALLOWED_FEEDBACK_MIME_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
+MAX_FEEDBACK_ATTACHMENTS = 3
+MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024
 
 
 app = FastAPI(title="AI-Assisted Exam Analytics Platform")
@@ -146,8 +167,6 @@ def create_exam(payload: ExamCreate, session: Session = Depends(_get_db)) -> Exa
     return exam
 
 
-
-
 @app.get("/exams", response_model=List[ExamRead])
 def list_exams(session: Session = Depends(_get_db)) -> List[ExamRead]:
     stmt = select(Exam)
@@ -155,6 +174,7 @@ def list_exams(session: Session = Depends(_get_db)) -> List[ExamRead]:
     for exam in exams:
         session.refresh(exam, attribute_names=["questions"])
     return [ExamRead.model_validate(exam) for exam in exams]
+
 
 @app.get("/exams/{exam_id}", response_model=ExamRead)
 def get_exam(exam_id: int, session: Session = Depends(_get_db)) -> Exam:
@@ -183,8 +203,6 @@ def create_submission(payload: SubmissionCreate, session: Session = Depends(_get
     return SubmissionDetail.model_validate(submission)
 
 
-
-
 @app.get("/submissions", response_model=List[SubmissionDetail])
 def list_submissions(
     exam_id: Optional[int] = None,
@@ -201,6 +219,7 @@ def list_submissions(
     for submission in submissions:
         session.refresh(submission, attribute_names=["responses"])
     return [SubmissionDetail.model_validate(item) for item in submissions]
+
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionDetail)
 def get_submission(submission_id: int, session: Session = Depends(_get_db)) -> SubmissionDetail:
@@ -237,29 +256,33 @@ async def upload_submission(
     submission.exam = exam
 
     try:
-        ocr_rows = extract_question_rows(image_bytes)
+        ocr_rows, ocr_steps = run_ocr_pipeline(image_bytes)
     except OCRProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    submission.raw_ocr_payload = ocr_rows
+    submission.raw_ocr_payload = {"rows": ocr_rows, "steps": ocr_steps}
     session.add(submission)
     session.commit()
 
-    responses, mistakes = auto_grade_submission(session, submission, ocr_rows)
+    grading_artifacts = auto_grade_submission(session, submission, ocr_rows)
 
     session.refresh(submission)
     session.refresh(submission, attribute_names=["responses"])
 
     submission_schema = SubmissionRead.model_validate(submission)
-    responses_schema = [ResponseRead.model_validate(item) for item in responses]
-    mistakes_schema = [MistakeRead.model_validate(item) for item in mistakes]
+    responses_schema = [ResponseRead.model_validate(item) for item in grading_artifacts.responses]
+    mistakes_schema = [MistakeRead.model_validate(item) for item in grading_artifacts.mistakes]
     ocr_schema = [OCRResult.model_validate(item) for item in ocr_rows]
+    combined_steps = ocr_steps + [step.as_dict() for step in grading_artifacts.steps]
+    step_schemas = [ProcessingStep(**step) for step in combined_steps]
 
     return SubmissionProcessingResult(
         submission=submission_schema,
         responses=responses_schema,
         mistakes=mistakes_schema,
         ocr_rows=ocr_schema,
+        processing_steps=step_schemas,
+        ai_summary=grading_artifacts.ai_summary,
     )
 
 
@@ -284,7 +307,11 @@ def update_manual_score(
     submission = session.get(Submission, response.submission_id)
     if submission is not None:
         session.refresh(submission, attribute_names=["responses"])
-        scored = [item.score or 0.0 for item in submission.responses if item.score is not None]
+        scored = [
+            item.score or 0.0
+            for item in submission.responses
+            if item.score is not None and item.applies_to_student
+        ]
         submission.total_score = sum(scored) if scored else submission.total_score
         session.add(submission)
         session.commit()
@@ -316,8 +343,6 @@ def create_practice_assignment_endpoint(
 
     session.refresh(assignment, attribute_names=["items"])
     return PracticeAssignmentRead.model_validate(assignment)
-
-
 
 
 @app.get("/practice", response_model=List[PracticeAssignmentRead])
@@ -356,6 +381,121 @@ def analytics_summary(payload: AnalyticsFilter, session: Session = Depends(_get_
     return build_analytics(session, payload)
 
 
+@app.post("/assistant/chat", response_model=AssistantChatResponse)
+def teacher_assistant_chat(
+    payload: AssistantChatRequest,
+    session: Session = Depends(_get_db),  # noqa: ARG001 - for future personalization
+):
+    llm_kwargs = {
+        "temperature": payload.temperature,
+        "top_p": payload.top_p,
+        "presence_penalty": payload.presence_penalty,
+        "frequency_penalty": payload.frequency_penalty,
+    }
+    message_payloads = [message.model_dump() for message in payload.messages]
+
+    if payload.stream:
+        def event_stream() -> Iterator[str]:
+            yield from stream_teacher_assistant(message_payloads, **llm_kwargs)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    try:
+        answer, suggestions = run_teacher_assistant(message_payloads, **llm_kwargs)
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMInvocationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return AssistantChatResponse(
+        reply={"role": "assistant", "content": answer},
+        suggestions=suggestions,
+    )
+
+@app.get("/assistant/status", response_model=LLMConfigStatus)
+def get_assistant_status() -> LLMConfigStatus:
+    return LLMConfigStatus(available=llm_available())
+
+
+@app.post("/assistant/config", response_model=LLMConfigStatus)
+def update_assistant_config(payload: LLMConfigUpdate) -> LLMConfigStatus:
+    try:
+        set_llm_credentials(
+            api_key=payload.api_key,
+            base_url=payload.base_url,
+            text_model=payload.text_model,
+            vision_model=payload.vision_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return LLMConfigStatus(available=llm_available())
+
+
+@app.post("/feedback/teacher", response_model=TeacherFeedbackRead, status_code=201)
+async def submit_teacher_feedback(
+    content: str = Form(...),
+    is_anonymous: bool = Form(False),
+    teacher_id: Optional[int] = Form(None),
+    teacher_name: Optional[str] = Form(None),
+    teacher_email: Optional[str] = Form(None),
+    attachments: Optional[List[UploadFile]] = File(default=None),
+    session: Session = Depends(_get_db),
+) -> TeacherFeedbackRead:
+    cleaned_content = content.strip()
+    if not cleaned_content:
+        raise HTTPException(status_code=400, detail="反馈内容不能为空")
+
+    files = attachments or []
+    if len(files) > MAX_FEEDBACK_ATTACHMENTS:
+        raise HTTPException(status_code=400, detail=f"一次最多可上传 {MAX_FEEDBACK_ATTACHMENTS} 张图片")
+
+    FEEDBACK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    stored_paths: List[str] = []
+    for upload in files:
+        if upload.content_type not in ALLOWED_FEEDBACK_MIME_TYPES:
+            raise HTTPException(status_code=400, detail="仅支持上传 JPG/PNG/WebP 图片")
+        data = await upload.read()
+        if not data:
+            continue
+        if len(data) > MAX_FEEDBACK_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="单张图片需小于 3MB")
+        extension_map = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+        }
+        suffix = extension_map.get(upload.content_type, Path(upload.filename or "").suffix.lower() or ".bin")
+        filename = f"{uuid4().hex}{suffix}"
+        file_path = FEEDBACK_STORAGE_DIR / filename
+        file_path.write_bytes(data)
+        stored_paths.append(f"feedback/{filename}")
+
+    if is_anonymous:
+        teacher_id_value = None
+        teacher_name_value = None
+        teacher_email_value = None
+    else:
+        teacher_id_value = teacher_id
+        teacher_name_value = teacher_name
+        teacher_email_value = teacher_email
+
+    feedback = TeacherFeedback(
+        content=cleaned_content,
+        is_anonymous=is_anonymous,
+        attachments=stored_paths,
+        teacher_id=teacher_id_value,
+        teacher_name=teacher_name_value,
+        teacher_email=teacher_email_value,
+    )
+    session.add(feedback)
+    session.commit()
+    session.refresh(feedback)
+    return TeacherFeedbackRead.model_validate(feedback)
+
+
 
 
 @app.post("/bootstrap/demo")
@@ -375,6 +515,7 @@ def bootstrap_demo(session: Session = Depends(_get_db)):
         "exam_id": exam.id,
     }
 
+
 @app.get("/practice/{assignment_id}/pdf")
 def download_practice_pdf(assignment_id: int, session: Session = Depends(_get_db)):
     assignment = session.get(PracticeAssignment, assignment_id)
@@ -384,6 +525,4 @@ def download_practice_pdf(assignment_id: int, session: Session = Depends(_get_db
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF 文件不存在或已被删除")
     return FileResponse(str(pdf_path), filename=pdf_path.name)
-
-
 

@@ -73,3 +73,25 @@ export const fetchAnalytics = async (payload) => {
     const { data } = await apiClient.post("/analytics", payload);
     return data;
 };
+export const askTeachingAssistant = async (messages, options = {}) => {
+    const { data } = await apiClient.post("/assistant/chat", {
+        messages,
+        ...options,
+        stream: false,
+    });
+    return data;
+};
+export const fetchAssistantStatus = async () => {
+    const { data } = await apiClient.get("/assistant/status");
+    return data;
+};
+export const updateAssistantConfig = async (payload) => {
+    const { data } = await apiClient.post("/assistant/config", payload);
+    return data;
+};
+export const submitTeacherFeedback = async (formData) => {
+    const { data } = await apiClient.post("/feedback/teacher", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+    });
+    return data;
+};

@@ -29,6 +29,7 @@ export interface Question {
   knowledge_tags?: string;
   answer_key?: Record<string, unknown>;
   rubric?: Record<string, unknown>;
+  target_student_ids?: number[] | null;
 }
 
 export interface Exam {
@@ -52,6 +53,7 @@ export interface SubmissionResponse {
   ocr_confidence?: number;
   teacher_annotation?: Record<string, unknown> | null;
   comments?: string;
+  applies_to_student: boolean;
 }
 
 export interface SubmissionDetail {
@@ -70,6 +72,12 @@ export interface OCRRow {
   raw_text: string;
   annotation?: string | null;
   confidence: number;
+}
+
+export interface ProcessingStep {
+  name: string;
+  status: "success" | "warning" | "error";
+  detail?: string;
 }
 
 export interface Mistake {
@@ -105,6 +113,8 @@ export interface SubmissionProcessingResult {
   responses: SubmissionResponse[];
   mistakes: Mistake[];
   ocr_rows: OCRRow[];
+  processing_steps: ProcessingStep[];
+  ai_summary?: string;
 }
 
 export interface AnalyticsSummary {
@@ -122,3 +132,38 @@ export interface KnowledgePointBreakdown {
   accuracy: number;
   average_score: number;
 }
+
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantChatResponse {
+  reply: AssistantMessage;
+  suggestions?: string[];
+}
+
+export interface LLMConfigStatus {
+  available: boolean;
+}
+
+export interface LLMConfigUpdate {
+  api_key: string;
+  base_url?: string;
+  text_model?: string;
+  vision_model?: string;
+}
+
+
+export interface TeacherFeedback {
+  id: number;
+  content: string;
+  is_anonymous: boolean;
+  attachments: string[];
+  status: string;
+  created_at: string;
+  teacher_id?: number;
+  teacher_name?: string;
+  teacher_email?: string;
+}
+

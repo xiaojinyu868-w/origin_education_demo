@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import defaultdict
 from statistics import median
@@ -41,7 +41,11 @@ def build_analytics(session: Session, filters: AnalyticsFilter) -> AnalyticsSumm
     total_students = len({submission.student_id for submission in submissions})
     total_submissions = len(submissions)
 
-    scored = [submission.total_score for submission in submissions if submission.total_score is not None]
+    scored = [
+        submission.total_score
+        for submission in submissions
+        if submission.total_score is not None
+    ]
     average_score = sum(scored) / len(scored) if scored else 0.0
     median_score = median(scored) if scored else 0.0
 
@@ -53,6 +57,8 @@ def build_analytics(session: Session, filters: AnalyticsFilter) -> AnalyticsSumm
     })
 
     for response in _response_iterable(submissions):
+        if response.applies_to_student is False:
+            continue
         question: Question = response.question
         tags = (question.knowledge_tags or "Unspecified").split(",")
         tags = [tag.strip() or "Unspecified" for tag in tags]

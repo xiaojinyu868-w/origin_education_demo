@@ -46,6 +46,7 @@ interface QuestionDraft {
   max_score: number;
   knowledge_tags?: string;
   answer_key?: Record<string, unknown>;
+  target_student_ids?: number[];
 }
 
 const defaultQuestion: QuestionDraft = {
@@ -55,6 +56,7 @@ const defaultQuestion: QuestionDraft = {
   max_score: 1,
   knowledge_tags: "",
   answer_key: { correct: "A", options: ["A", "B", "C", "D"] },
+  target_student_ids: [],
 };
 
 const questionTypeOptions = [
@@ -83,6 +85,17 @@ const RosterSetup = () => {
   const [examCount, setExamCount] = useState(0);
   const [questionDrafts, setQuestionDrafts] = useState<QuestionDraft[]>([defaultQuestion]);
   const [submitting, setSubmitting] = useState(false);
+
+  const studentLookup = useMemo(() => {
+    const map = new Map<number, Student>();
+    students.forEach((item) => map.set(item.id, item));
+    return map;
+  }, [students]);
+
+  const studentOptions = useMemo(() => students.map((student) => ({
+    value: student.id,
+    label: student.name,
+  })), [students]);
 
   useEffect(() => {
     void refreshAll();
@@ -162,6 +175,9 @@ const RosterSetup = () => {
               <Paragraph style={{ marginBottom: 0 }}>{item.prompt || "题干待完善"}</Paragraph>
               <Text type="secondary">知识点：{item.knowledge_tags || "未标注"}</Text>
               <Text type="secondary">满分 {item.max_score} 分</Text>
+              <Text type="secondary">适用范围：{(item.target_student_ids && item.target_student_ids.length > 0) ? item.target_student_ids
+                .map((id) => studentLookup.get(id)?.name || `学生 #${id}`)
+                .join("、") : "默认全班"}</Text>
             </Space>
           }
         />
@@ -184,6 +200,7 @@ const RosterSetup = () => {
           max_score: item.max_score,
           knowledge_tags: item.knowledge_tags,
           answer_key: item.answer_key,
+          target_student_ids: item.target_student_ids && item.target_student_ids.length > 0 ? item.target_student_ids : undefined,
         })),
       };
       await createExam(payload);
@@ -392,6 +409,18 @@ const RosterSetup = () => {
                         value={item.knowledge_tags}
                         onChange={(event) => handleQuestionChange(index, { knowledge_tags: event.target.value })}
                         placeholder="知识点标签"
+                      />
+                    </Col>
+
+                    <Col xs={24} md={6}>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        placeholder="默认全班，如需定向请选择学生"
+                        options={studentOptions}
+                        value={item.target_student_ids}
+                        onChange={(value) => handleQuestionChange(index, { target_student_ids: value })}
+                        maxTagCount="responsive"
                       />
                     </Col>
                   </Row>

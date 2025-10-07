@@ -1,5 +1,8 @@
 ﻿import type {
   AnalyticsSummary,
+  AssistantChatResponse,
+  AssistantMessage,
+  LLMConfigStatus,
   Classroom,
   Exam,
   Mistake,
@@ -8,6 +11,7 @@
   SubmissionDetail,
   SubmissionProcessingResult,
   Teacher,
+  TeacherFeedback,
 } from "../types";
 import { apiClient } from "./client";
 
@@ -133,3 +137,48 @@ export const fetchAnalytics = async (payload: {
   const { data } = await apiClient.post<AnalyticsSummary>("/analytics", payload);
   return data;
 };
+
+export interface AssistantChatOptions {
+  temperature?: number;
+  top_p?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  stream?: boolean;
+}
+
+export const askTeachingAssistant = async (
+  messages: AssistantMessage[],
+  options: AssistantChatOptions = {},
+) => {
+  const { data } = await apiClient.post<AssistantChatResponse>("/assistant/chat", {
+    messages,
+    ...options,
+    stream: false,
+  });
+  return data;
+};
+
+
+export const fetchAssistantStatus = async () => {
+  const { data } = await apiClient.get<LLMConfigStatus>("/assistant/status");
+  return data;
+};
+
+export const updateAssistantConfig = async (payload: {
+  api_key: string;
+  base_url?: string;
+  text_model?: string;
+  vision_model?: string;
+}) => {
+  const { data } = await apiClient.post<LLMConfigStatus>("/assistant/config", payload);
+  return data;
+};
+
+
+export const submitTeacherFeedback = async (formData: FormData) => {
+  const { data } = await apiClient.post<TeacherFeedback>("/feedback/teacher", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+};
+

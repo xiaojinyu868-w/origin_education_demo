@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import date, datetime
+from enum import Enum
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -82,6 +83,7 @@ class QuestionBase(BaseModel):
     answer_key: Optional[Dict] = None
     rubric: Optional[Dict] = None
     extra_metadata: Optional[Dict] = None
+    target_student_ids: Optional[List[int]] = None
 
 
 class QuestionCreate(QuestionBase):
@@ -145,6 +147,7 @@ class ResponseRead(BaseModel):
     ocr_confidence: Optional[float]
     teacher_annotation: Optional[Dict]
     comments: Optional[str]
+    applies_to_student: bool
 
     class Config:
         from_attributes = True
@@ -229,11 +232,25 @@ class OCRResult(BaseModel):
     confidence: float
 
 
+class ProcessingStepStatus(str, Enum):
+    success = "success"
+    warning = "warning"
+    error = "error"
+
+
+class ProcessingStep(BaseModel):
+    name: str
+    status: ProcessingStepStatus = ProcessingStepStatus.success
+    detail: Optional[str] = None
+
+
 class SubmissionProcessingResult(BaseModel):
     submission: SubmissionRead
     responses: List[ResponseRead]
     mistakes: List[MistakeRead]
     ocr_rows: List[OCRResult]
+    processing_steps: List[ProcessingStep] = Field(default_factory=list)
+    ai_summary: Optional[str] = None
 
 
 class ManualScoreUpdate(BaseModel):
@@ -246,3 +263,57 @@ class ManualScoreUpdate(BaseModel):
 class PracticeCompletionUpdate(BaseModel):
     assignment_id: int
     completed: bool
+
+
+class TeacherFeedbackCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+    is_anonymous: bool = False
+    teacher_id: Optional[int] = None
+    teacher_name: Optional[str] = None
+    teacher_email: Optional[str] = None
+
+
+class TeacherFeedbackRead(BaseModel):
+    id: int
+    content: str
+    is_anonymous: bool
+    attachments: List[str]
+    status: str
+    created_at: datetime
+    teacher_id: Optional[int] = None
+    teacher_name: Optional[str] = None
+    teacher_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AssistantMessage(BaseModel):
+    role: str
+    content: str
+
+
+class AssistantChatRequest(BaseModel):
+    messages: List[AssistantMessage]
+    temperature: float = 0.3
+    top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    presence_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
+    stream: bool = True
+
+
+class AssistantChatResponse(BaseModel):
+    reply: AssistantMessage
+    suggestions: Optional[List[str]] = None
+
+
+class LLMConfigUpdate(BaseModel):
+    api_key: str
+    base_url: Optional[str] = None
+    text_model: Optional[str] = None
+    vision_model: Optional[str] = None
+
+
+class LLMConfigStatus(BaseModel):
+    available: bool
+

@@ -64,6 +64,10 @@ class Teacher(SQLModel, table=True):
         back_populates="teacher",
         sa_relationship=relationship("Exam", back_populates="teacher"),
     )
+    feedbacks: list["TeacherFeedback"] = Relationship(
+        back_populates="teacher",
+        sa_relationship=relationship("TeacherFeedback", back_populates="teacher"),
+    )
 
 
 class Classroom(SQLModel, table=True):
@@ -131,6 +135,7 @@ class Question(SQLModel, table=True):
     answer_key: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     rubric: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     extra_metadata: Optional[dict] = Field(default=None, sa_column=Column("question_extra_metadata", JSON))
+    target_student_ids: Optional[list[int]] = Field(default=None, sa_column=Column(JSON))
 
     exam: Optional["Exam"] = Relationship(
         back_populates="questions",
@@ -177,6 +182,7 @@ class Response(SQLModel, table=True):
     ocr_confidence: Optional[float] = None
     teacher_annotation: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     comments: Optional[str] = None
+    applies_to_student: bool = Field(default=True, index=True)
 
     submission: Optional["Submission"] = Relationship(
         back_populates="responses",
@@ -249,4 +255,21 @@ class PracticeItem(SQLModel, table=True):
     )
     source_mistake: Optional["Mistake"] = Relationship(
         sa_relationship=relationship("Mistake"),
+    )
+
+
+class TeacherFeedback(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    teacher_id: Optional[int] = Field(default=None, foreign_key="teacher.id")
+    teacher_name: Optional[str] = None
+    teacher_email: Optional[str] = None
+    is_anonymous: bool = Field(default=False, index=True)
+    content: str
+    attachments: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    status: str = Field(default="pending", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    teacher: Optional["Teacher"] = Relationship(
+        back_populates="feedbacks",
+        sa_relationship=relationship("Teacher", back_populates="feedbacks"),
     )

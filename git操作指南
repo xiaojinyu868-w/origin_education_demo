@@ -1,0 +1,139 @@
+PS C:\Users\Li Hao\Desktop\first> Write-Host "=== 本地仓库配置 ==="; git config --local --list;
+>>
+=== 本地仓库配置 ===
+core.repositoryformatversion=0
+core.filemode=false
+core.bare=false
+core.logallrefupdates=true
+core.symlinks=false
+core.ignorecase=true
+remote.origin.url=https://github.com/xiaojinyu868-w/origin_education_demo.git
+remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+branch.master.remote=origin
+branch.master.merge=refs/heads/master
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 远程仓库关联 ==="; git remote -v; git remote show origin;
+
+=== 远程仓库关联 ===
+origin  https://github.com/xiaojinyu868-w/origin_education_demo.git (fetch)
+origin  https://github.com/xiaojinyu868-w/origin_education_demo.git (push)
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 分支信息 ==="; git branch; git branch -a; git branch -vv;
+
+=== 分支信息 ===
+* master
+* master
+  remotes/origin/master
+* master 4d8bda4 [origin/master] 首次提交：初始化项目
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 最近5条提交记录（详细） ==="; git log -5 --pretty=fuller;
+
+=== 最近5条提交记录（详细） ===
+commit 4d8bda4180a45cdc19907db0ac5967e5292f886c (HEAD -> master, origin/master)
+Author:     Li Hao <1181783314@qq.com>
+AuthorDate: Sun Oct 5 21:57:03 2025 +0800
+Commit:     Li Hao <1181783314@qq.com>
+CommitDate: Sun Oct 5 21:57:03 2025 +0800
+
+    首次提交：初始化项目
+
+commit b3a81ac4ffd144b54b8957932652df83a38ae12d
+Author:     Li Hao <1181783314@qq.com>
+AuthorDate: Sun Oct 5 21:56:46 2025 +0800
+Commit:     Li Hao <1181783314@qq.com>
+CommitDate: Sun Oct 5 21:56:46 2025 +0800
+
+    更新 .gitignore，排除 node_modules 依赖目录
+
+commit ef692d608d2f8e7a528703a9608224fe6ce56cfc
+Author:     Li Hao <1181783314@qq.com>
+AuthorDate: Sun Oct 5 21:54:35 2025 +0800
+Commit:     Li Hao <1181783314@qq.com>
+CommitDate: Sun Oct 5 21:54:35 2025 +0800
+
+    首次提交：初始化项目文件
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 最近5条提交记录（简洁带分支图） ==="; git log --oneline --graph --decorate -5;
+
+=== 最近5条提交记录（简洁带分支图） ===
+* 4d8bda4 (HEAD -> master, origin/master) 首次提交：初始化项目
+* b3a81ac 更新 .gitignore，排除 node_modules 依赖目录
+* ef692d6 首次提交：初始化项目文件
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 工作区状态 ==="; git status;
+
+=== 工作区状态 ===
+On branch master
+Your branch is up to date with 'origin/master'.
+
+nothing to commit, working tree clean
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 忽略规则检查（当前目录文件） ==="; git check-ignore -v *;
+
+=== 忽略规则检查（当前目录文件） ===
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 仓库根目录路径 ==="; git rev-parse --show-toplevel^C
+PS C:\Users\Li Hao\Desktop\first> Write-Host "=== 本地仓库配置 ==="; git config --local --list;
+=== 本地仓库配置 ===
+core.repositoryformatversion=0
+core.filemode=false
+core.bare=false
+core.logallrefupdates=true
+core.symlinks=false
+core.ignorecase=true
+remote.origin.url=https://github.com/xiaojinyu868-w/origin_education_demo.git
+remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+branch.master.remote=origin
+branch.master.merge=refs/heads/master
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 远程仓库关联 ==="; git remote -v; git remote show origin;
+
+=== 远程仓库关联 ===
+origin  https://github.com/xiaojinyu868-w/origin_education_demo.git (fetch)
+origin  https://github.com/xiaojinyu868-w/origin_education_demo.git (push)
+fatal: unable to access 'https://github.com/xiaojinyu868-w/origin_education_demo.git/': TLS connect error: error:00000000:lib(0)::reason(0)
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 分支信息 ==="; git branch; git branch -a; git branch -vv;
+
+=== 分支信息 ===
+* master
+* master
+  remotes/origin/master
+* master 4d8bda4 [origin/master] 首次提交：初始化项目
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 最近5条提交记录（详细） ==="; git log -5 --pretty=fuller;
+
+=== 最近5条提交记录（详细） ===
+commit 4d8bda4180a45cdc19907db0ac5967e5292f886c (HEAD -> master, origin/master)
+Author:     Li Hao <1181783314@qq.com>
+AuthorDate: Sun Oct 5 21:57:03 2025 +0800
+Commit:     Li Hao <1181783314@qq.com>
+CommitDate: Sun Oct 5 21:57:03 2025 +0800
+
+    首次提交：初始化项目
+
+commit b3a81ac4ffd144b54b8957932652df83a38ae12d
+Author:     Li Hao <1181783314@qq.com>
+AuthorDate: Sun Oct 5 21:56:46 2025 +0800
+Commit:     Li Hao <1181783314@qq.com>
+CommitDate: Sun Oct 5 21:56:46 2025 +0800
+
+    更新 .gitignore，排除 node_modules 依赖目录
+
+commit ef692d608d2f8e7a528703a9608224fe6ce56cfc
+Author:     Li Hao <1181783314@qq.com>
+AuthorDate: Sun Oct 5 21:54:35 2025 +0800
+Commit:     Li Hao <1181783314@qq.com>
+CommitDate: Sun Oct 5 21:54:35 2025 +0800
+
+    首次提交：初始化项目文件
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 最近5条提交记录（简洁带分支图） ==="; git log --oneline --graph --decorate -5;
+
+=== 最近5条提交记录（简洁带分支图） ===
+* 4d8bda4 (HEAD -> master, origin/master) 首次提交：初始化项目
+* b3a81ac 更新 .gitignore，排除 node_modules 依赖目录
+* ef692d6 首次提交：初始化项目文件
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 工作区状态 ==="; git status;
+
+=== 工作区状态 ===
+On branch master
+Your branch is up to date with 'origin/master'.
+
+nothing to commit, working tree clean
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 忽略规则检查（当前目录文件） ==="; git check-ignore -v *;
+
+=== 忽略规则检查（当前目录文件） ===
+PS C:\Users\Li Hao\Desktop\first> Write-Host "`n=== 仓库根目录路径 ==="; git rev-parse --show-toplevel
+
+=== 仓库根目录路径 ===
+C:/Users/Li Hao/Desktop/first
