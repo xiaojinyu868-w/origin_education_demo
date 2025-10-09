@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import json
@@ -27,7 +27,7 @@ def _read_env(var_name: str, fallback: Optional[str] = None) -> Optional[str]:
 
 def reset_llm_client_cache() -> None:
     """Clear cached OpenAI client so that updated配置马上生效。"""
-    _get_client.cache_clear()  # type: ignore[attr-defined]
+    _get_client.cache_clear()  # type: ignore[attr-defined]\n    get_qwen_client.cache_clear()  # type: ignore[attr-defined]
 
 
 def set_llm_credentials(
@@ -77,6 +77,151 @@ def _parse_json_payload(content: str) -> Dict[str, Any]:
         raise LLMInvocationError("大模型返回内容无法解析为 JSON：{}".format(text[:200]))
 
 
+
+def _build_data_url(image_bytes: bytes, *, mime_type: str = "image/png") -> str:
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime_type};base64,{base64_image}"
+
+
+class QwenClient:
+    """封装通义千问 qwen3-vl-plus 多模态 JSON 调用。"""
+
+    def __init__(self) -> None:
+        self._client = _get_client()
+        self._vision_model = _read_env("QWEN_VL_MODEL", "qwen3-vl-plus")
+
+    def _image_payload(self, image_bytes: bytes, *, mime_type: str = "image/png") -> Dict[str, Any]:
+        return {
+            "type": "image_url",
+            "image_url": {"url": _build_data_url(image_bytes, mime_type=mime_type)},
+        }
+
+    def _request_json(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        temperature: float = 0.0,
+        max_retries: int = 2,
+    ) -> Dict[str, Any]:
+        last_error: Optional[Exception] = None
+        for _ in range(max_retries):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._vision_model,
+                    messages=messages,
+                    temperature=temperature,
+                )
+                if not response.choices:
+                    raise LLMInvocationError("大模型未返回任何结果。")
+                content = response.choices[0].message.content or ""
+                return _parse_json_payload(content)
+            except Exception as exc:  # noqa: BLE001 - propagate after retries
+                last_error = exc
+        raise LLMInvocationError(
+            "大模型返回异常，已重试 {retries} 次：{error}".format(
+                retries=max_retries,
+                error=last_error,
+            ),
+        ) from last_error
+
+    def parse_exam_outline(self, image_bytes: bytes, *, locale: str = "zh-CN") -> Dict[str, Any]:
+        system_prompt = (
+            "你是一名资深教研员，需要从试卷扫描件中提取结构化信息。"
+            "任何时候都必须输出 JSON，且字段命名需使用驼峰式英文。"
+        )
+        user_instruction = (
+            "请阅读上传的整张试卷扫描件，并输出 JSON。\n"
+            "JSON 结构：{\"title\": str, \"subject\": str, \"questions\": ["
+            "{\"number\": str, \"type\": \"multiple_choice|fill_in_blank|subjective\", "
+            "\"prompt\": str, \"maxScore\": number, \"answerKey\": object, \"options\": list 或 null}]。\n"
+            "\"answerKey\" 字段需要包含批改所需的全部标准答案信息，例如多选题使用 {\"correct\": \"A\", \"options\": [\"A\", \"B\", ...]}，"
+            "填空题可使用 {\"acceptableAnswers\": [...], \"numeric\": bool, \"numericTolerance\": number}。\n"
+            "请勿输出除 JSON 外的任何文本。"
+        )
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    self._image_payload(image_bytes),
+                    {"type": "text", "text": user_instruction},
+                ],
+            },
+        ]
+        payload = self._request_json(messages)
+        if "questions" not in payload:
+            raise LLMInvocationError("大模型返回数据缺少 questions 字段。")
+        return payload
+
+    def grade_exam_submission(
+        self,
+        *,
+        exam_outline: Dict[str, Any],
+        student_image: bytes,
+        locale: str = "zh-CN",
+        extra_instructions: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        exam_json = json.dumps(exam_outline, ensure_ascii=False)
+        system_prompt = (
+            "你是一名经验丰富的阅卷老师，需要根据标准答案和学生的作答图像给出评分。"
+            "始终返回 JSON，不要输出多余文本。"
+        )
+        user_prompt = (
+            f"以下是试卷的结构与标准答案 JSON：\n```json\n{exam_json}\n```\n"
+            "请认真阅读学生的完整试卷图片，根据标准答案逐题给分。\n"
+            "输出 JSON：{\"matchingScore\": number, \"responses\": ["
+            "{\"questionNumber\": str, \"studentAnswer\": str 或 null, \"normalizedAnswer\": str 或 null, "
+            "\"score\": number 或 null, \"isCorrect\": bool 或 null, \"aiConfidence\": number, "
+            "\"comments\": str 或 null, \"needsReview\": bool }], \"mistakes\": ["
+            "{\"questionNumber\": str, \"knowledgeTags\": str 或 null, \"explanation\": str 或 null}],"
+            " \"processingSteps\": [{\"name\": str, \"status\": \"success|warning|error\", \"detail\": str 或 null}],"
+            " \"summary\": str }。\n"
+            "若无法确认某题答案，请将该题标记 needsReview=true，并在 comments 中说明原因。"
+        )
+        if extra_instructions:
+            user_prompt += f"\n额外说明：{extra_instructions}"
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    self._image_payload(student_image),
+                    {"type": "text", "text": user_prompt},
+                ],
+            },
+        ]
+        payload = self._request_json(messages, temperature=0.1)
+        if "responses" not in payload:
+            raise LLMInvocationError("大模型返回数据缺少 responses 字段。")
+        return payload
+
+
+@lru_cache(maxsize=1)
+def get_qwen_client() -> QwenClient:
+    return QwenClient()
+
+
+def parse_exam_outline(image_bytes: bytes, *, locale: str = "zh-CN") -> Dict[str, Any]:
+    return get_qwen_client().parse_exam_outline(image_bytes, locale=locale)
+
+
+def grade_exam_submission_with_ai(
+    *,
+    exam_outline: Dict[str, Any],
+    student_image: bytes,
+    locale: str = "zh-CN",
+    extra_instructions: Optional[str] = None,
+) -> Dict[str, Any]:
+    return get_qwen_client().grade_exam_submission(
+        exam_outline=exam_outline,
+        student_image=student_image,
+        locale=locale,
+        extra_instructions=extra_instructions,
+    )
+
+
+
 def _ensure_confidence(value: Any) -> float:
     try:
         confidence = float(value)
@@ -90,8 +235,7 @@ def run_vision_ocr(image_bytes: bytes) -> Tuple[List[Dict[str, Optional[str]]], 
 
     client = _get_client()
     model_name = _read_env("QWEN_VL_MODEL", "qwen3-vl-plus")
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
-    image_url = f"data:image/png;base64,{base64_image}"
+    image_url = _build_data_url(image_bytes)
 
     messages = [
         {
@@ -292,7 +436,7 @@ def _extract_answer_and_suggestions(content: str) -> Tuple[str, List[str]]:
         block = content[sugg_start + len("<suggestions>"):sugg_end]
         for line in block.splitlines():
             candidate = line.strip()
-            if candidate.startswith(("-", "•")):
+            if candidate.startswith(("-", "?")):
                 candidate = candidate[1:].strip()
             if candidate:
                 suggestions.append(candidate)
@@ -483,3 +627,5 @@ def llm_available() -> bool:
         return True
     except LLMNotConfiguredError:
         return False
+
+

@@ -1,12 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from .models import PracticeStatus, QuestionType, SubmissionStatus
+from .models import AnswerStatus, PracticeStatus, QuestionType, ResponseReviewStatus, SessionStatus, SubmissionStatus
 
 
 class StudentBase(BaseModel):
@@ -84,6 +84,8 @@ class QuestionBase(BaseModel):
     rubric: Optional[Dict] = None
     extra_metadata: Optional[Dict] = None
     target_student_ids: Optional[List[int]] = None
+    answer_status: Optional[AnswerStatus] = AnswerStatus.draft
+    answer_confidence: Optional[float] = None
 
 
 class QuestionCreate(QuestionBase):
@@ -97,12 +99,25 @@ class QuestionRead(QuestionBase):
         from_attributes = True
 
 
+class AnswerPatch(BaseModel):
+    question_id: int
+    answer_key: Optional[Dict] = None
+    answer_status: Optional[AnswerStatus] = None
+    answer_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class ExamAnswerKeyUpdate(BaseModel):
+    questions: List[AnswerPatch]
+
+
 class ExamBase(BaseModel):
     title: str
     subject: Optional[str] = None
     scheduled_date: Optional[date] = None
     teacher_id: int
     classroom_id: Optional[int] = None
+    source_image_path: Optional[str] = None
+    parsed_outline: Optional[Dict] = None
 
 
 class ExamCreate(ExamBase):
@@ -116,6 +131,11 @@ class ExamRead(ExamBase):
 
     class Config:
         from_attributes = True
+
+
+class ExamDraftResponse(BaseModel):
+    source_image_path: str
+    outline: Dict[str, Any]
 
 
 class SubmissionCreate(BaseModel):
@@ -148,6 +168,10 @@ class ResponseRead(BaseModel):
     teacher_annotation: Optional[Dict]
     comments: Optional[str]
     applies_to_student: bool
+    ai_confidence: Optional[float] = None
+    review_status: Optional[ResponseReviewStatus] = ResponseReviewStatus.pending
+    teacher_comment: Optional[str] = None
+    ai_raw: Optional[Dict] = None
 
     class Config:
         from_attributes = True
@@ -156,6 +180,34 @@ class ResponseRead(BaseModel):
 class SubmissionDetail(SubmissionRead):
     responses: List[ResponseRead]
 
+
+class GradingSessionCreate(BaseModel):
+    teacher_id: int
+    exam_id: Optional[int] = None
+    payload: Optional[Dict] = None
+
+
+class GradingSessionUpdate(BaseModel):
+    current_step: Optional[int] = Field(default=None, ge=1, le=5)
+    status: Optional[SessionStatus] = None
+    exam_id: Optional[int] = None
+    payload: Optional[Dict] = None
+    last_error: Optional[str] = None
+
+
+class GradingSessionRead(BaseModel):
+    id: int
+    teacher_id: int
+    exam_id: Optional[int]
+    current_step: int
+    status: SessionStatus
+    payload: Optional[Dict]
+    last_error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 class MistakeRead(BaseModel):
     id: int
@@ -316,4 +368,6 @@ class LLMConfigUpdate(BaseModel):
 
 class LLMConfigStatus(BaseModel):
     available: bool
+
+
 

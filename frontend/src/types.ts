@@ -1,5 +1,10 @@
 ﻿export type QuestionType = "multiple_choice" | "fill_in_blank" | "subjective";
 
+export type SubmissionStatus = "pending" | "graded" | "needs_review";
+export type AnswerStatus = "draft" | "confirmed";
+export type ResponseReviewStatus = "pending" | "confirmed" | "needs_review";
+export type SessionStatus = "active" | "completed" | "cancelled";
+
 export interface Student {
   id: number;
   name: string;
@@ -30,6 +35,8 @@ export interface Question {
   answer_key?: Record<string, unknown>;
   rubric?: Record<string, unknown>;
   target_student_ids?: number[] | null;
+  answer_status?: AnswerStatus;
+  answer_confidence?: number | null;
 }
 
 export interface Exam {
@@ -41,6 +48,8 @@ export interface Exam {
   classroom_id?: number;
   answer_key_version: number;
   questions: Question[];
+  source_image_path?: string | null;
+  parsed_outline?: Record<string, unknown> | null;
 }
 
 export interface SubmissionResponse {
@@ -54,16 +63,24 @@ export interface SubmissionResponse {
   teacher_annotation?: Record<string, unknown> | null;
   comments?: string;
   applies_to_student: boolean;
+  ai_confidence?: number | null;
+  review_status?: ResponseReviewStatus;
+  teacher_comment?: string | null;
+  ai_raw?: Record<string, unknown> | null;
 }
 
 export interface SubmissionDetail {
   id: number;
   student_id: number;
   exam_id: number;
+  session_id?: number | null;
   submitted_at: string;
   total_score?: number;
-  status: string;
-  metadata?: Record<string, unknown> | null;
+  status: SubmissionStatus | string;
+  extra_metadata?: Record<string, unknown> | null;
+  overall_confidence?: number | null;
+  status_detail?: string | null;
+  ai_trace_id?: string | null;
   responses: SubmissionResponse[];
 }
 
@@ -78,6 +95,18 @@ export interface ProcessingStep {
   name: string;
   status: "success" | "warning" | "error";
   detail?: string;
+}
+
+export interface ProcessingLog {
+  id: number;
+  submission_id: number;
+  step: string;
+  actor_type: "system" | "teacher" | "assistant";
+  actor_id?: number | null;
+  detail?: string | null;
+  ai_trace_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface Mistake {
@@ -115,6 +144,8 @@ export interface SubmissionProcessingResult {
   ocr_rows: OCRRow[];
   processing_steps: ProcessingStep[];
   ai_summary?: string;
+  matching_score?: number | null;
+  processing_logs?: ProcessingLog[];
 }
 
 export interface AnalyticsSummary {
@@ -154,7 +185,6 @@ export interface LLMConfigUpdate {
   vision_model?: string;
 }
 
-
 export interface TeacherFeedback {
   id: number;
   content: string;
@@ -167,3 +197,38 @@ export interface TeacherFeedback {
   teacher_email?: string;
 }
 
+export interface GradingSession {
+  id: number;
+  teacher_id: number;
+  exam_id?: number | null;
+  current_step: number;
+  status: SessionStatus;
+  payload?: Record<string, unknown> | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExamDraftResponse {
+  source_image_path: string;
+  outline: Record<string, unknown>;
+}
+
+export interface AnswerPatch {
+  question_id: number;
+  answer_key: Record<string, unknown>;
+  answer_status?: AnswerStatus;
+  answer_confidence?: number | null;
+}
+
+export interface SubmissionHistoryEntry {
+  submission: SubmissionDetail;
+  student: Student;
+  exam?: Exam | null;
+  processing_steps: ProcessingStep[];
+  matching_score?: number | null;
+}
+
+export interface ProcessingLogList {
+  items: ProcessingLog[];
+}

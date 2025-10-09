@@ -1,8 +1,9 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import zhCN from "antd/locale/zh_CN";
-import { ApartmentOutlined, BarChartOutlined, BookOutlined, CheckCircleOutlined, CloudUploadOutlined, CustomerServiceOutlined, HomeOutlined, UploadOutlined, } from "@ant-design/icons";
-import { Avatar, Button, ConfigProvider, Form, Input, Layout, Menu, Modal, Space, Switch, Tooltip, Typography, Upload, message, } from "antd";
+import { ApartmentOutlined, BarChartOutlined, BookOutlined, CheckCircleOutlined, CloudUploadOutlined, CustomerServiceOutlined, HomeOutlined, UploadOutlined, ApiOutlined, } from "@ant-design/icons";
+import { Avatar, Button, ConfigProvider, Form, Input, Layout, Menu, Modal, Space, Switch, Tag, Tooltip, Typography, Upload, message, } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import AnalyticsCenter from "./pages/AnalyticsCenter";
 import Dashboard from "./pages/Dashboard";
 import MistakeCenter from "./pages/MistakeCenter";
@@ -10,19 +11,26 @@ import PracticeCenter from "./pages/PracticeCenter";
 import RosterSetup from "./pages/RosterSetup";
 import TeacherAssistant from "./pages/TeacherAssistant";
 import UploadCenter from "./pages/UploadCenter";
-import { submitTeacherFeedback } from "./api/services";
+import LlmConfigModal from "./components/LlmConfigModal";
+import { fetchAssistantStatus, submitTeacherFeedback } from "./api/services";
 import { NAVIGATE_EVENT } from "./utils/navigation";
+import GradingWizard from "./grading-wizard/GradingWizard";
+import { WizardProvider } from "./grading-wizard/WizardProvider";
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Paragraph, Text } = Typography;
 const NAV_ITEMS = [
-    { key: "dashboard", label: "工作台", icon: _jsx(HomeOutlined, {}) },
-    { key: "roster", label: "班级搭建", icon: _jsx(ApartmentOutlined, {}) },
-    { key: "upload", label: "上传批改", icon: _jsx(CloudUploadOutlined, {}) },
-    { key: "mistake", label: "错题智库", icon: _jsx(BookOutlined, {}) },
-    { key: "practice", label: "练习派送", icon: _jsx(CheckCircleOutlined, {}) },
-    { key: "assistant", label: "AI教研助手", icon: _jsx(CustomerServiceOutlined, {}) },
-    { key: "analytics", label: "学情洞察", icon: _jsx(BarChartOutlined, {}) },
+    { key: "dashboard", label: "工作台", icon: _jsx(HomeOutlined, {}), path: "/dashboard", component: Dashboard },
+    { key: "roster", label: "班级搭建", icon: _jsx(ApartmentOutlined, {}), path: "/roster", component: RosterSetup },
+    { key: "upload", label: "上传批改", icon: _jsx(CloudUploadOutlined, {}), path: "/upload", component: UploadCenter },
+    { key: "mistake", label: "错题智库", icon: _jsx(BookOutlined, {}), path: "/mistake", component: MistakeCenter },
+    { key: "practice", label: "练习派送", icon: _jsx(CheckCircleOutlined, {}), path: "/practice", component: PracticeCenter },
+    { key: "assistant", label: "AI教研助手", icon: _jsx(CustomerServiceOutlined, {}), path: "/assistant", component: TeacherAssistant },
+    { key: "analytics", label: "学情洞察", icon: _jsx(BarChartOutlined, {}), path: "/analytics", component: AnalyticsCenter },
 ];
+const ROUTE_BY_KEY = NAV_ITEMS.reduce((acc, item) => {
+    acc[item.key] = item.path;
+    return acc;
+}, {});
 const menuTitleMap = {
     dashboard: "全局工作台",
     roster: "搭建教学班级",
@@ -43,14 +51,23 @@ const menuDescriptionMap = {
 };
 const ALLOWED_FEEDBACK_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024;
+const deriveActiveKey = (pathname) => {
+    const matched = NAV_ITEMS.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`));
+    return matched?.key ?? "dashboard";
+};
 const App = () => {
     const [collapsed, setCollapsed] = useState(false);
-    const [activeKey, setActiveKey] = useState("dashboard");
     const [feedbackVisible, setFeedbackVisible] = useState(false);
     const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
     const [feedbackFiles, setFeedbackFiles] = useState([]);
     const [feedbackAnonymous, setFeedbackAnonymous] = useState(false);
     const [feedbackForm] = Form.useForm();
+    const [llmConfigVisible, setLlmConfigVisible] = useState(false);
+    const [llmStatus, setLlmStatus] = useState("unknown");
+    const location = useLocation();
+    const navigate = useNavigate();
+    const activeKey = useMemo(() => deriveActiveKey(location.pathname), [location.pathname]);
+    const isWizardRoute = location.pathname.startsWith("/grading/wizard");
     const applyStoredFeedbackProfile = useCallback(() => {
         try {
             const stored = localStorage.getItem("teacherFeedbackProfile");
@@ -81,12 +98,28 @@ const App = () => {
     useEffect(() => {
         const handler = (event) => {
             const custom = event;
-            if (custom.detail && NAV_ITEMS.some((item) => item.key === custom.detail)) {
-                setActiveKey(custom.detail);
+            if (custom.detail) {
+                const target = ROUTE_BY_KEY[custom.detail];
+                if (target) {
+                    navigate(target);
+                }
             }
         };
         window.addEventListener(NAVIGATE_EVENT, handler);
         return () => window.removeEventListener(NAVIGATE_EVENT, handler);
+    }, [navigate]);
+    useEffect(() => {
+        const loadAssistantStatus = async () => {
+            try {
+                const { available } = await fetchAssistantStatus();
+                setLlmStatus(available ? "available" : "unavailable");
+            }
+            catch (error) {
+                console.error(error);
+                setLlmStatus("unavailable");
+            }
+        };
+        void loadAssistantStatus();
     }, []);
     const feedbackUploadProps = useMemo(() => ({
         multiple: true,
@@ -168,26 +201,32 @@ const App = () => {
             setFeedbackSubmitting(false);
         }
     };
-    const content = useMemo(() => {
-        switch (activeKey) {
-            case "dashboard":
-                return _jsx(Dashboard, {});
-            case "roster":
-                return _jsx(RosterSetup, {});
-            case "upload":
-                return _jsx(UploadCenter, {});
-            case "mistake":
-                return _jsx(MistakeCenter, {});
-            case "practice":
-                return _jsx(PracticeCenter, {});
-            case "assistant":
-                return _jsx(TeacherAssistant, {});
-            case "analytics":
-                return _jsx(AnalyticsCenter, {});
-            default:
-                return _jsx(Dashboard, {});
-        }
-    }, [activeKey]);
+    if (isWizardRoute) {
+        return (_jsx(ConfigProvider, { locale: zhCN, theme: {
+                token: {
+                    colorPrimary: "#2563eb",
+                    borderRadiusLG: 18,
+                    fontFamily: '"SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif',
+                },
+                components: {
+                    Layout: {
+                        headerBg: "transparent",
+                        siderBg: "transparent",
+                        bodyBg: "transparent",
+                    },
+                    Menu: {
+                        colorItemBg: "transparent",
+                        itemSelectedColor: "#1d4ed8",
+                        itemSelectedBg: "rgba(37,99,235,0.12)",
+                        itemHoverBg: "rgba(37,99,235,0.08)",
+                        radiusItem: 12,
+                    },
+                    Button: {
+                        borderRadius: 12,
+                    },
+                },
+            }, children: _jsx(WizardProvider, { children: _jsx(GradingWizard, {}) }) }));
+    }
     return (_jsxs(ConfigProvider, { locale: zhCN, theme: {
             token: {
                 colorPrimary: "#2563eb",
@@ -216,7 +255,12 @@ const App = () => {
                                     width: "100%",
                                     justifyContent: collapsed ? "center" : "flex-start",
                                     padding: collapsed ? "12px" : "28px 20px 16px",
-                                }, children: [_jsx(Avatar, { size: collapsed ? 44 : 52, src: "/logo.svg" }), !collapsed && (_jsxs(Space, { direction: "vertical", size: 4, children: [_jsx(Title, { level: 5, style: { color: "#0f172a", margin: 0 }, children: "\u667A\u6167\u6279\u6539\u5E73\u53F0" }), _jsx(Text, { type: "secondary", children: "AI \u8D4B\u80FD \u00B7 \u65E0\u75DB\u4E0A\u624B" })] }))] }), _jsx(Menu, { theme: "light", mode: "inline", selectedKeys: [activeKey], onClick: ({ key }) => setActiveKey(key), style: {
+                                }, children: [_jsx(Avatar, { size: collapsed ? 44 : 52, src: "/logo.svg" }), !collapsed && (_jsxs(Space, { direction: "vertical", size: 4, children: [_jsx(Title, { level: 5, style: { color: "#0f172a", margin: 0 }, children: "\u667A\u6167\u6279\u6539\u5E73\u53F0" }), _jsx(Text, { type: "secondary", children: "AI \u8D4B\u80FD \u00B7 \u65E0\u75DB\u4E0A\u624B" })] }))] }), _jsx(Menu, { theme: "light", mode: "inline", selectedKeys: [activeKey], onClick: ({ key }) => {
+                                    const target = ROUTE_BY_KEY[key];
+                                    if (target) {
+                                        navigate(target);
+                                    }
+                                }, style: {
                                     background: "transparent",
                                     padding: collapsed ? "0 12px" : "0 18px",
                                     border: "none",
@@ -228,6 +272,11 @@ const App = () => {
                                             color: "#334155",
                                             background: "rgba(15, 23, 42, 0.06)",
                                             borderRadius: 14,
-                                        }, onClick: handleFeedbackOpen, children: !collapsed && "反馈痛点" }) }) })] }), _jsxs(Layout, { className: "app-main", children: [_jsxs(Header, { className: "app-header", children: [_jsxs(Space, { direction: "vertical", size: 6, children: [_jsx(Text, { type: "secondary", style: { letterSpacing: 1 }, children: "WELCOME" }), _jsx(Title, { level: 3, style: { margin: 0 }, children: menuTitleMap[activeKey] }), _jsx(Paragraph, { type: "secondary", style: { margin: 0 }, children: menuDescriptionMap[activeKey] })] }), _jsxs(Space, { size: 12, children: [_jsx(Button, { type: "text", onClick: () => setActiveKey("dashboard"), children: "\u56DE\u5230\u5DE5\u4F5C\u53F0" }), _jsx(Button, { type: "primary", shape: "round", onClick: () => setActiveKey("upload"), children: "\u7ACB\u5373\u6279\u6539" })] })] }), _jsx(Content, { className: "app-content", children: _jsx("div", { className: "app-content-wrapper fade-in", children: content }) }), _jsx(Footer, { className: "app-footer", children: _jsxs(Text, { type: "secondary", children: ["\u00A9 ", new Date().getFullYear(), " \u667A\u6167\u6279\u6539\u4E0E\u5B66\u60C5\u5E73\u53F0 \u00B7 Crafted for delightful teaching"] }) })] })] }), _jsx(Modal, { title: "\u53CD\u9988\u6559\u5B66\u75DB\u70B9", open: feedbackVisible, onCancel: handleFeedbackCancel, onOk: () => feedbackForm.submit(), okText: "\u63D0\u4EA4\u53CD\u9988", cancelText: "\u53D6\u6D88", confirmLoading: feedbackSubmitting, destroyOnClose: true, children: _jsxs(Form, { form: feedbackForm, layout: "vertical", initialValues: { is_anonymous: false }, onValuesChange: handleFeedbackValuesChange, onFinish: handleFeedbackFinish, children: [_jsx(Form.Item, { name: "content", label: "\u95EE\u9898\u63CF\u8FF0", rules: [{ required: true, message: "请填写问题描述" }], children: _jsx(Input.TextArea, { autoSize: { minRows: 4, maxRows: 6 }, placeholder: "\u63CF\u8FF0\u6559\u5B66\u8FC7\u7A0B\u4E2D\u9047\u5230\u7684\u75DB\u70B9\u3001\u5F71\u54CD\u4EE5\u53CA\u671F\u5F85\u7684\u652F\u6301", maxLength: 2000, showCount: true }) }), _jsxs(Form.Item, { label: "\u4E0A\u4F20\u622A\u56FE", children: [_jsx(Upload, { ...feedbackUploadProps, children: _jsx(Button, { icon: _jsx(UploadOutlined, {}), children: "\u6DFB\u52A0\u56FE\u7247" }) }), _jsx(Text, { type: "secondary", style: { display: "block", marginTop: 8 }, children: "\u652F\u6301 jpg/png/webp\uFF0C\u6700\u591A 3 \u5F20\uFF0C\u6BCF\u5F20\u4E0D\u8D85\u8FC7 3MB\u3002" })] }), _jsx(Form.Item, { name: "is_anonymous", label: "\u533F\u540D\u63D0\u4EA4", valuePropName: "checked", children: _jsx(Switch, { checkedChildren: "\u533F\u540D", unCheckedChildren: "\u5B9E\u540D" }) }), _jsx(Form.Item, { name: "teacher_name", label: "\u59D3\u540D", rules: [{ required: !feedbackAnonymous, message: "请输入姓名" }], children: _jsx(Input, { placeholder: "\u8BF7\u8F93\u5165\u59D3\u540D", disabled: feedbackAnonymous }) }), _jsx(Form.Item, { name: "teacher_email", label: "\u90AE\u7BB1", rules: feedbackAnonymous ? [] : [{ type: "email", message: "请输入有效的邮箱地址" }], children: _jsx(Input, { placeholder: "teacher@example.com", disabled: feedbackAnonymous }) })] }) })] }));
+                                        }, onClick: handleFeedbackOpen, children: !collapsed && "反馈痛点" }) }) })] }), _jsxs(Layout, { className: "app-main", children: [_jsxs(Header, { className: "app-header", children: [_jsxs(Space, { direction: "vertical", size: 6, children: [_jsx(Text, { type: "secondary", style: { letterSpacing: 1 }, children: "WELCOME" }), _jsx(Title, { level: 3, style: { margin: 0 }, children: menuTitleMap[activeKey] }), _jsx(Paragraph, { type: "secondary", style: { margin: 0 }, children: menuDescriptionMap[activeKey] })] }), _jsxs(Space, { size: 12, align: "center", children: [llmStatus !== "unknown" && (_jsx(Tag, { color: llmStatus === "available" ? "success" : "warning", children: llmStatus === "available" ? "API 已配置" : "API 待配置" })), _jsx(Button, { icon: _jsx(ApiOutlined, {}), onClick: () => setLlmConfigVisible(true), children: "\u914D\u7F6E API Key" }), _jsx(Button, { type: "text", onClick: () => navigate("/dashboard"), children: "\u56DE\u5230\u5DE5\u4F5C\u53F0" }), _jsx(Button, { type: "primary", shape: "round", onClick: () => navigate("/upload"), children: "\u7ACB\u5373\u6279\u6539" })] })] }), _jsx(Content, { className: "app-content", children: _jsx("div", { className: "app-content-wrapper fade-in", children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/dashboard", replace: true }) }), NAV_ITEMS.map((item) => {
+                                                const Component = item.component;
+                                                return _jsx(Route, { path: item.path, element: _jsx(Component, {}) }, item.key);
+                                            }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/dashboard", replace: true }) })] }) }) }), _jsx(Footer, { className: "app-footer", children: _jsxs(Text, { type: "secondary", children: ["\u00A9 ", new Date().getFullYear(), " \u667A\u6167\u6279\u6539\u4E0E\u5B66\u60C5\u5E73\u53F0 \u00B7 Crafted for delightful teaching"] }) })] })] }), _jsx(LlmConfigModal, { open: llmConfigVisible, onClose: () => setLlmConfigVisible(false), onUpdated: (status) => {
+                    setLlmStatus(status.available ? "available" : "unavailable");
+                } }), _jsx(Modal, { title: "\u53CD\u9988\u6559\u5B66\u75DB\u70B9", open: feedbackVisible, onCancel: handleFeedbackCancel, onOk: () => feedbackForm.submit(), okText: "\u63D0\u4EA4\u53CD\u9988", cancelText: "\u53D6\u6D88", confirmLoading: feedbackSubmitting, destroyOnClose: true, children: _jsxs(Form, { form: feedbackForm, layout: "vertical", initialValues: { is_anonymous: false }, onValuesChange: handleFeedbackValuesChange, onFinish: handleFeedbackFinish, children: [_jsx(Form.Item, { name: "content", label: "\u95EE\u9898\u63CF\u8FF0", rules: [{ required: true, message: "请填写问题描述" }], children: _jsx(Input.TextArea, { autoSize: { minRows: 4, maxRows: 6 }, placeholder: "\u63CF\u8FF0\u6559\u5B66\u8FC7\u7A0B\u4E2D\u9047\u5230\u7684\u75DB\u70B9\u3001\u5F71\u54CD\u4EE5\u53CA\u671F\u5F85\u7684\u652F\u6301", maxLength: 2000, showCount: true }) }), _jsxs(Form.Item, { label: "\u4E0A\u4F20\u622A\u56FE", children: [_jsx(Upload, { ...feedbackUploadProps, children: _jsx(Button, { icon: _jsx(UploadOutlined, {}), children: "\u6DFB\u52A0\u56FE\u7247" }) }), _jsx(Text, { type: "secondary", style: { display: "block", marginTop: 8 }, children: "\u652F\u6301 jpg/png/webp\uFF0C\u6700\u591A 3 \u5F20\uFF0C\u6BCF\u5F20\u4E0D\u8D85\u8FC7 3MB\u3002" })] }), _jsx(Form.Item, { name: "is_anonymous", label: "\u533F\u540D\u63D0\u4EA4", valuePropName: "checked", children: _jsx(Switch, { checkedChildren: "\u533F\u540D", unCheckedChildren: "\u5B9E\u540D" }) }), _jsx(Form.Item, { name: "teacher_name", label: "\u59D3\u540D", rules: [{ required: !feedbackAnonymous, message: "请输入姓名" }], children: _jsx(Input, { placeholder: "\u8BF7\u8F93\u5165\u59D3\u540D", disabled: feedbackAnonymous }) }), _jsx(Form.Item, { name: "teacher_email", label: "\u90AE\u7BB1", rules: feedbackAnonymous ? [] : [{ type: "email", message: "请输入有效的邮箱地址" }], children: _jsx(Input, { placeholder: "teacher@example.com", disabled: feedbackAnonymous }) })] }) })] }));
 };
 export default App;

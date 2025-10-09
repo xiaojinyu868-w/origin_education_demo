@@ -1,192 +1,454 @@
 ﻿import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  Drawer,
+  Empty,
+  Form,
+  Input,
+  List,
+  Row,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+  message,
+} from "antd";
+import {
   CloudUploadOutlined,
   FileSearchOutlined,
-  InboxOutlined,
+  HistoryOutlined,
+  ReloadOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Card, Empty, Form, Input, Select, Space, Typography, Upload, message } from "antd";
 import dayjs from "dayjs";
-import { useEffect, useState } from "react";
-import PageLayout from "../components/PageLayout";
-import SubmissionResultDrawer from "../components/SubmissionResultDrawer";
-import type {
-  Exam,
-  Student,
-  SubmissionDetail,
-  SubmissionProcessingResult,
-} from "../types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
+  fetchActiveGradingSession,
   fetchExams,
   fetchStudents,
-  fetchSubmissions,
-  uploadSubmission,
+  fetchSubmission,
+  fetchSubmissionHistory,
+  fetchSubmissionLogs,
 } from "../api/services";
+import PageLayout from "../components/PageLayout";
+import type {
+  Exam,
+  GradingSession,
+  ProcessingLog,
+  SubmissionDetail,
+  SubmissionHistoryEntry,
+  Student,
+} from "../types";
 
-const { Paragraph, Title, Text } = Typography;
+const { Title, Paragraph, Text } = Typography;
+
+const HISTORY_LIMIT = 20;
+
+const STATUS_OPTIONS = [
+  { label: "全部状态", value: undefined },
+  { label: "待处理", value: "pending" },
+  { label: "待人工确认", value: "needs_review" },
+  { label: "已完成", value: "graded" },
+];
+
+const statusDisplay = (raw?: string | null) => {
+  const value = (raw ?? "").toLowerCase();
+  if (value.includes("needs")) return "待人工确认";
+  if (value.includes("pending")) return "待处理";
+  if (value.includes("graded")) return "已完成";
+  return value || "--";
+};
+
+const pickWizardStep = (submission: SubmissionDetail): number => {
+  const status = (submission.status ?? "").toLowerCase();
+  if (status.includes("needs") || submission.responses.some((item) => item.review_status === "needs_review")) {
+    return 4;
+  }
+  if (status.includes("pending")) {
+    return 3;
+  }
+  return 5;
+};
 
 const UploadCenter = () => {
-  const [students, setStudents] = useState<Student[]>([]);
+  const navigate = useNavigate();
   const [exams, setExams] = useState<Exam[]>([]);
-  const [submissions, setSubmissions] = useState<SubmissionDetail[]>([]);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<SubmissionProcessingResult | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [filters, setFilters] = useState<{ examId?: number; studentId?: number; status?: string }>({});
 
-  const loadData = async () => {
-    const [studentList, examList, submissionList] = await Promise.all([
-      fetchStudents(),
-      fetchExams(),
-      fetchSubmissions(),
-    ]);
-    setStudents(studentList);
-    setExams(examList);
-    setSubmissions(submissionList.slice(0, 10));
+  const [history, setHistory] = useState<SubmissionHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [activeSession, setActiveSession] = useState<GradingSession | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
+
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailSubmission, setDetailSubmission] = useState<SubmissionDetail | null>(null);
+  const [detailLogs, setDetailLogs] = useState<ProcessingLog[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const loadMetadata = useCallback(async () => {
+    try {
+      const [examList, studentList] = await Promise.all([fetchExams(), fetchStudents()]);
+      setExams(examList);
+      setStudents(studentList);
+    } catch (error) {
+      const detail = (
+        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (error instanceof Error ? error.message : "基础数据加载失败")
+      );
+      message.error(detail);
+    }
+  }, []);
+
+  const ensureActiveSession = useCallback(async () => {
+    const teacherId = exams.find((exam) => exam.teacher_id)?.teacher_id;
+    if (!teacherId) {
+      setActiveSession(null);
+      return;
+    }
+    try {
+      setSessionLoading(true);
+      const session = await fetchActiveGradingSession(teacherId).catch(() => null);
+      setActiveSession(session);
+    } finally {
+      setSessionLoading(false);
+    }
+  }, [exams]);
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const data = await fetchSubmissionHistory({
+        exam_id: filters.examId,
+        student_id: filters.studentId,
+        status: filters.status,
+        limit: HISTORY_LIMIT,
+      });
+      setHistory(data);
+    } catch (error) {
+      const detail = (
+        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (error instanceof Error ? error.message : "历史记录获取失败")
+      );
+      message.error(detail);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [filters.examId, filters.studentId, filters.status]);
+
+  const openSubmissionDetail = useCallback(async (submissionId: number) => {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    try {
+      const [submission, logList] = await Promise.all([
+        fetchSubmission(submissionId),
+        fetchSubmissionLogs(submissionId).catch(() => ({ items: [] })),
+      ]);
+      setDetailSubmission(submission);
+      setDetailLogs(logList.items ?? []);
+    } catch (error) {
+      const detail = (
+        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (error instanceof Error ? error.message : "提交详情加载失败")
+      );
+      message.error(detail);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const closeDetail = () => {
+    setDetailOpen(false);
+    setDetailSubmission(null);
+    setDetailLogs([]);
   };
 
   useEffect(() => {
-    void loadData();
-  }, []);
+    void loadMetadata();
+  }, [loadMetadata]);
 
-  const handleUpload = async (values: { student_id: number; exam_id: number }) => {
-    if (!selectedFile) {
-      message.warning("请先选择试卷图片");
-      return;
-    }
+  useEffect(() => {
+    void ensureActiveSession();
+  }, [ensureActiveSession]);
 
-    const formData = new FormData();
-    formData.append("student_id", String(values.student_id));
-    formData.append("exam_id", String(values.exam_id));
-    formData.append("image", selectedFile);
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
 
-    setLoading(true);
-    try {
-      const uploadResult = await uploadSubmission(formData);
-      setResult(uploadResult);
-      setDrawerOpen(true);
-      message.success("上传成功，自动批改已完成");
-      await loadData();
-    } finally {
-      setLoading(false);
-    }
+  const examOptions = useMemo(() => {
+    const base: { value: number | undefined; label: string }[] = [{ value: undefined, label: "全部试卷" }];
+    return base.concat(exams.map((exam) => ({ value: exam.id, label: exam.title })));
+  }, [exams]);
+
+  const studentOptions = useMemo(() => {
+    const base: { value: number | undefined; label: string }[] = [{ value: undefined, label: "全部学生" }];
+    return base.concat(students.map((student) => ({ value: student.id, label: student.name })));
+  }, [students]);
+
+  const navigateToWizard = (step: number, submissionId?: number) => {
+    const safeStep = Math.min(5, Math.max(1, step));
+    const query = submissionId ? `?step=${safeStep}&resume=${submissionId}` : `?step=${safeStep}`;
+    navigate(`/grading/wizard${query}`);
   };
 
   return (
-    <Space direction="vertical" size={28} style={{ width: "100%" }}>
-      <Card bordered={false} className="shadow-panel" bodyStyle={{ padding: 28 }}>
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
-          <Title level={3} style={{ marginBottom: 0 }}>
-            拍照、拖拽、上传 —— 批改不再等待
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            支持 JPG、PNG、PDF 等格式，系统会自动识别题号、答案以及红笔批注，实现无纸化批改。
-          </Paragraph>
-        </Space>
+    <Space direction="vertical" size={24} style={{ width: "100%" }}>
+      <Card bordered={false} style={{ borderRadius: 22, padding: 0, overflow: "hidden" }} bodyStyle={{ padding: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 32,
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "36px 40px",
+            background: "linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%)",
+          }}
+        >
+          <Space direction="vertical" size={12} style={{ maxWidth: 640 }}>
+            <Title level={3} style={{ margin: 0 }}>
+              上传批改中心
+            </Title>
+            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              将上传、复核、导出拆解为五个步骤，保证每一次批改都有迹可循。点击下方按钮即可回到沉浸式批改向导。
+            </Paragraph>
+            <Space size={12} wrap>
+              <Button
+                type="primary"
+                size="large"
+                shape="round"
+                icon={<CloudUploadOutlined />}
+                onClick={() => navigate(`/grading/wizard?step=1`)}
+              >
+                开始新一轮批改
+              </Button>
+              <Button
+                size="large"
+                shape="round"
+                icon={<FileSearchOutlined />}
+                onClick={() => loadHistory()}
+                loading={historyLoading}
+              >
+                刷新历史记录
+              </Button>
+            </Space>
+            {sessionLoading ? (
+              <Spin size="small" />
+            ) : (
+              activeSession && activeSession.status === "active" && (
+                <Alert
+                  showIcon
+                  type="info"
+                  message="检测到未完成的批改流程"
+                  description={`当前停留在第 ${activeSession.current_step} 步，可随时继续。`}
+                  action={
+                    <Button
+                      type="primary"
+                      size="small"
+                      onClick={() => navigateToWizard(activeSession.current_step ?? 1)}
+                    >
+                      继续批改
+                    </Button>
+                  }
+                />
+              )
+            )}
+          </Space>
+          <Card
+            bordered={false}
+            style={{
+              borderRadius: 20,
+              width: 280,
+              background: "rgba(37, 99, 235, 0.08)",
+              border: "1px solid rgba(37, 99, 235, 0.16)",
+              boxShadow: "0 18px 42px rgba(37, 99, 235, 0.15)",
+            }}
+            bodyStyle={{ display: "flex", flexDirection: "column", gap: 12 }}
+          >
+            <Space align="center" size={10}>
+              <HistoryOutlined style={{ fontSize: 20, color: "#1d4ed8" }} />
+              <Text strong style={{ fontSize: 18 }}>
+                向导全局进度
+              </Text>
+            </Space>
+            <Text type="secondary">
+              支持随时退出并恢复上下文，未完成任务会在首页提醒继续完成。
+            </Text>
+            <Tag color="blue" style={{ alignSelf: "flex-start" }}>
+              支持断点续办
+            </Tag>
+          </Card>
+        </div>
       </Card>
 
-      <PageLayout
-        title="上传试卷"
-        description="选择学生与对应试卷后，拖入照片或扫描件即可开始批改。"
-        extra={
-          <Button icon={<FileSearchOutlined />} onClick={() => setDrawerOpen(true)}>
-            查看上一份结果
-          </Button>
-        }
-      >
-        <Alert
-          type="info"
-          showIcon
-          message="拍摄建议"
-          description="请确保题号清晰、每题独占一行；主观题批注建议使用红色笔迹，以提升识别率。"
-          style={{ marginBottom: 20 }}
-        />
-        <Form layout="vertical" onFinish={handleUpload} disabled={loading}>
-          <Form.Item
-            name="student_id"
-            label="选择学生"
-            rules={[{ required: true, message: "请选择学生" }]}
-          >
+      <Card bordered={false} style={{ borderRadius: 20 }}>
+        <Form layout="inline" style={{ rowGap: 12 }}>
+          <Form.Item label="试卷">
             <Select
-              placeholder="请选择学生"
-              options={students.map((student) => ({ value: student.id, label: student.name }))}
+              style={{ width: 200 }}
+              value={filters.examId}
+              options={examOptions as { value: number | undefined; label: string }[]}
+              onChange={(value) => setFilters((prev) => ({ ...prev, examId: value }))}
             />
           </Form.Item>
-          <Form.Item
-            name="exam_id"
-            label="选择试卷"
-            rules={[{ required: true, message: "请选择试卷" }]}
-          >
+          <Form.Item label="学生">
             <Select
-              placeholder="请选择试卷"
-              options={exams.map((exam) => ({ value: exam.id, label: `${exam.title} · ${exam.subject || "未分类"}` }))}
+              style={{ width: 200 }}
+              value={filters.studentId}
+              showSearch
+              options={studentOptions as { value: number | undefined; label: string }[]}
+              onChange={(value) => setFilters((prev) => ({ ...prev, studentId: value }))}
             />
           </Form.Item>
-          <Form.Item label="上传文件" required>
-            <Upload.Dragger
-              multiple={false}
-              maxCount={1}
-              accept=".jpg,.jpeg,.png,.pdf"
-              beforeUpload={(file) => {
-                setSelectedFile(file);
-                return false;
-              }}
-              onRemove={() => setSelectedFile(null)}
-            >
-              <p className="ant-upload-drag-icon">
-                <InboxOutlined />
-              </p>
-              <p className="ant-upload-text">拖拽或点击上传</p>
-              <p className="ant-upload-hint">单个文件建议小于 10MB，越清晰识别越准确</p>
-            </Upload.Dragger>
+          <Form.Item label="状态">
+            <Select
+              style={{ width: 160 }}
+              value={filters.status}
+              options={STATUS_OPTIONS}
+              onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}
+            />
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="default" icon={<FileSearchOutlined />} onClick={() => setDrawerOpen(true)}>
-                打开最新批改
+              <Button type="primary" icon={<FileSearchOutlined />} onClick={() => loadHistory()} loading={historyLoading}>
+                查询
               </Button>
-              <Button type="primary" htmlType="submit" loading={loading}>
-                开始上传并批改
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                  setFilters({});
+                }}
+              >
+                重置
               </Button>
             </Space>
           </Form.Item>
         </Form>
+      </Card>
+
+      <PageLayout title="批改历史回放" description="最近的批改记录会沉淀在此处，可快速查看详情或继续补批。">
+        <Spin spinning={historyLoading}>
+          {history.length === 0 ? (
+            <Empty description="暂无历史记录，立即发起第一轮批改吧！" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            <List
+              itemLayout="vertical"
+              dataSource={history}
+              renderItem={(entry) => {
+                const { submission, student, exam, processing_steps: steps, matching_score } = entry;
+                return (
+                  <List.Item
+                    key={submission.id}
+                    style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: 16 }}
+                    actions={[
+                      <Button key="detail" type="link" onClick={() => openSubmissionDetail(submission.id)}>
+                        查看详情
+                      </Button>,
+                      <Button
+                        key="resume"
+                        type="link"
+                        onClick={() => navigateToWizard(pickWizardStep(submission), submission.id)}
+                      >
+                        继续处理
+                      </Button>,
+                    ]}
+                  >
+                    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                      <Space align="center" size={12} wrap>
+                        <Text strong style={{ fontSize: 16 }}>
+                          {student.name} 的 {exam?.title ?? `试卷 #${submission.exam_id}`}
+                        </Text>
+                        <Tag color={submission.status === "graded" ? "green" : "orange"}>
+                          {statusDisplay(submission.status)}
+                        </Tag>
+                        {typeof matching_score === "number" && (
+                          <Tag color="blue">匹配度 {Math.round(matching_score * 100)}%</Tag>
+                        )}
+                        {submission.overall_confidence !== null && submission.overall_confidence !== undefined && (
+                          <Tag color="geekblue">置信度 {Math.round((submission.overall_confidence ?? 0) * 100)}%</Tag>
+                        )}
+                      </Space>
+                      <Text type="secondary">
+                        上传时间：{dayjs(submission.submitted_at).format("YYYY-MM-DD HH:mm")}
+                      </Text>
+                      <Space size={8} wrap>
+                        {steps.slice(0, 4).map((step, index) => (
+                          <Tag key={`${submission.id}-${index}`} color="geekblue" style={{ marginBottom: 4 }}>
+                            {step.name}
+                          </Tag>
+                        ))}
+                      </Space>
+                    </Space>
+                  </List.Item>
+                );
+              }}
+            />
+          )}
+        </Spin>
       </PageLayout>
 
-      <PageLayout
-        title="最近上传记录"
-        description="系统保留最近 10 份批改记录，方便快速回看。"
-      >
-        {submissions.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="还没有批改记录，马上上传第一份试卷吧！"
-          />
+      <Drawer title="提交详情" width={520} open={detailOpen} onClose={closeDetail} destroyOnClose>
+        {detailLoading || !detailSubmission ? (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 240 }}>
+            <Spin />
+          </div>
         ) : (
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            {submissions.map((submission) => (
-              <Card key={submission.id} bordered={false} className="shadow-panel" bodyStyle={{ padding: 16 }}>
-                <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                  <Space style={{ justifyContent: "space-between", width: "100%" }}>
-                    <Text strong>{`学生 ${submission.student_id}`}</Text>
-                    <Text type="secondary">试卷 ID · {submission.exam_id}</Text>
-                  </Space>
-                  <Text type="secondary">
-                    提交时间：{dayjs(submission.submitted_at).format("YYYY-MM-DD HH:mm")}
-                  </Text>
-                  <Text type="secondary">
-                    批改状态：{submission.status === "graded" ? "已完成" : "待人工确认"}
-                  </Text>
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="学生">{detailSubmission.student_id}</Descriptions.Item>
+              <Descriptions.Item label="试卷">{detailSubmission.exam_id}</Descriptions.Item>
+              <Descriptions.Item label="状态">{statusDisplay(detailSubmission.status)}</Descriptions.Item>
+              <Descriptions.Item label="总分">{detailSubmission.total_score ?? "--"}</Descriptions.Item>
+              <Descriptions.Item label="提交时间">
+                {dayjs(detailSubmission.submitted_at).format("YYYY-MM-DD HH:mm")}
+              </Descriptions.Item>
+            </Descriptions>
+            <Alert
+              type="info"
+              showIcon
+              message="快速操作"
+              description={
+                <Space>
+                  <Button
+                    type="primary"
+                    onClick={() => navigateToWizard(pickWizardStep(detailSubmission), detailSubmission.id)}
+                  >
+                    前往向导
+                  </Button>
+                  <Button onClick={() => navigate(`/grading/wizard?step=4`)}>打开复核界面</Button>
                 </Space>
-              </Card>
-            ))}
+              }
+            />
+            <Card title="处理日志" size="small">
+              {detailLogs.length === 0 ? (
+                <Empty description="暂无日志" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              ) : (
+                <List
+                  size="small"
+                  dataSource={detailLogs}
+                  renderItem={(log) => (
+                    <List.Item key={log.id}>
+                      <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                        <Space align="center" size={8}>
+                          <Badge color="blue" text={log.step} />
+                          <Text type="secondary">{dayjs(log.created_at).format("MM-DD HH:mm")}</Text>
+                        </Space>
+                        {log.detail && <Text>{log.detail}</Text>}
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              )}
+            </Card>
           </Space>
         )}
-      </PageLayout>
-
-      <SubmissionResultDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        result={result}
-      />
+      </Drawer>
     </Space>
   );
 };

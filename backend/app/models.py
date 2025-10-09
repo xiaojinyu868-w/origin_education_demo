@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, JSON
+from sqlalchemy import Column, Float, JSON, String
 from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -20,6 +20,23 @@ class SubmissionStatus(str, Enum):
     graded = "graded"
     needs_review = "needs_review"
 
+
+class ResponseReviewStatus(str, Enum):
+    pending = "pending"
+    confirmed = "confirmed"
+    needs_review = "needs_review"
+
+
+
+class AnswerStatus(str, Enum):
+    draft = "draft"
+    confirmed = "confirmed"
+
+
+class SessionStatus(str, Enum):
+    active = "active"
+    completed = "completed"
+    cancelled = "cancelled"
 
 class PracticeStatus(str, Enum):
     scheduled = "scheduled"
@@ -64,11 +81,36 @@ class Teacher(SQLModel, table=True):
         back_populates="teacher",
         sa_relationship=relationship("Exam", back_populates="teacher"),
     )
+    grading_sessions: list["GradingSession"] = Relationship(
+        back_populates="teacher",
+        sa_relationship=relationship("GradingSession", back_populates="teacher"),
+    )
     feedbacks: list["TeacherFeedback"] = Relationship(
         back_populates="teacher",
         sa_relationship=relationship("TeacherFeedback", back_populates="teacher"),
     )
 
+
+
+class GradingSession(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    teacher_id: int = Field(foreign_key="teacher.id", index=True)
+    exam_id: Optional[int] = Field(default=None, foreign_key="exam.id")
+    current_step: int = Field(default=1)
+    status: SessionStatus = Field(default=SessionStatus.active, index=True)
+    payload: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    last_error: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    teacher: Optional["Teacher"] = Relationship(
+        back_populates="grading_sessions",
+        sa_relationship=relationship("Teacher", back_populates="grading_sessions"),
+    )
+    exam: Optional["Exam"] = Relationship(
+        back_populates="grading_sessions",
+        sa_relationship=relationship("Exam", back_populates="grading_sessions"),
+    )
 
 class Classroom(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -109,6 +151,8 @@ class Exam(SQLModel, table=True):
     teacher_id: int = Field(foreign_key="teacher.id")
     classroom_id: Optional[int] = Field(default=None, foreign_key="classroom.id")
     answer_key_version: int = Field(default=1)
+    source_image_path: Optional[str] = None
+    parsed_outline: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     teacher: Optional["Teacher"] = Relationship(
         back_populates="exams",
@@ -121,6 +165,11 @@ class Exam(SQLModel, table=True):
     submissions: list["Submission"] = Relationship(
         back_populates="exam",
         sa_relationship=relationship("Submission", back_populates="exam"),
+    )
+
+    grading_sessions: list["GradingSession"] = Relationship(
+        back_populates="exam",
+        sa_relationship=relationship("GradingSession", back_populates="exam"),
     )
 
 
@@ -136,6 +185,14 @@ class Question(SQLModel, table=True):
     rubric: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     extra_metadata: Optional[dict] = Field(default=None, sa_column=Column("question_extra_metadata", JSON))
     target_student_ids: Optional[list[int]] = Field(default=None, sa_column=Column(JSON))
+    answer_status: AnswerStatus = Field(
+        default=AnswerStatus.draft,
+        sa_column=Column("answer_status", String, default=AnswerStatus.draft.value),
+    )
+    answer_confidence: Optional[float] = Field(
+        default=None,
+        sa_column=Column("answer_confidence", Float),
+    )
 
     exam: Optional["Exam"] = Relationship(
         back_populates="questions",
@@ -183,6 +240,10 @@ class Response(SQLModel, table=True):
     teacher_annotation: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     comments: Optional[str] = None
     applies_to_student: bool = Field(default=True, index=True)
+    ai_confidence: Optional[float] = None
+    review_status: ResponseReviewStatus = Field(default=ResponseReviewStatus.pending, index=True)
+    teacher_comment: Optional[str] = None
+    ai_raw: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     submission: Optional["Submission"] = Relationship(
         back_populates="responses",
@@ -273,3 +334,6 @@ class TeacherFeedback(SQLModel, table=True):
         back_populates="feedbacks",
         sa_relationship=relationship("Teacher", back_populates="feedbacks"),
     )
+
+
+

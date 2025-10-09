@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
+from datetime import datetime
 from typing import Iterator, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -14,9 +16,11 @@ from .models import (
     ClassEnrollment,
     Classroom,
     Exam,
+    GradingSession,
     PracticeAssignment,
     PracticeStatus,
     Question,
+    SessionStatus,
     Response,
     Student,
     Submission,
@@ -36,6 +40,11 @@ from .schemas import (
     EnrollmentRead,
     ExamCreate,
     ExamRead,
+    ExamAnswerKeyUpdate,
+    ExamDraftResponse,
+    GradingSessionCreate,
+    GradingSessionRead,
+    GradingSessionUpdate,
     ManualScoreUpdate,
     MistakeRead,
     OCRResult,
@@ -61,6 +70,7 @@ from .services.llm import (
     LLMInvocationError,
     LLMNotConfiguredError,
     llm_available,
+    parse_exam_outline,
     run_teacher_assistant,
     set_llm_credentials,
     stream_teacher_assistant,
@@ -71,6 +81,7 @@ from .services.practice import generate_practice_assignment
 from uuid import uuid4
 
 FEEDBACK_STORAGE_DIR = (Path(__file__).resolve().parent / "generated" / "feedback")
+EXAM_DRAFT_STORAGE_DIR = (Path(__file__).resolve().parent / "generated" / "exams")
 ALLOWED_FEEDBACK_MIME_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 MAX_FEEDBACK_ATTACHMENTS = 3
 MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024
@@ -151,6 +162,56 @@ def enroll_student(payload: EnrollmentCreate, session: Session = Depends(_get_db
     return enrollment
 
 
+@app.post("/exams/draft", response_model=ExamDraftResponse)
+async def create_exam_draft(
+    teacher_id: int = Form(...),
+    image: UploadFile = File(...),
+    session: Session = Depends(_get_db),
+) -> ExamDraftResponse:
+    teacher = session.get(Teacher, teacher_id)
+    if not teacher:
+        raise HTTPException(status_code=404, detail="???????")
+
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="?????????")
+
+    content_type = (image.content_type or "").lower()
+    if content_type and not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="???????????????")
+
+    try:
+        outline = parse_exam_outline(image_bytes)
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMInvocationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    extension = Path(image.filename or "").suffix.lower()
+    if not extension and content_type:
+        guessed = mimetypes.guess_extension(content_type.split(";")[0])
+        if guessed:
+            extension = guessed
+    if not extension:
+        extension = ".png"
+
+    EXAM_DRAFT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid4().hex}{extension}"
+    file_path = EXAM_DRAFT_STORAGE_DIR / filename
+    try:
+        file_path.write_bytes(image_bytes)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="????????") from exc
+
+    app_root = Path(__file__).resolve().parent
+    try:
+        relative_path = file_path.relative_to(app_root).as_posix()
+    except ValueError:
+        relative_path = file_path.as_posix()
+
+    return ExamDraftResponse(source_image_path=relative_path, outline=outline)
+
+
 @app.post("/exams", response_model=ExamRead)
 def create_exam(payload: ExamCreate, session: Session = Depends(_get_db)) -> Exam:
     exam = Exam(**payload.model_dump(exclude={"questions"}))
@@ -184,6 +245,142 @@ def get_exam(exam_id: int, session: Session = Depends(_get_db)) -> Exam:
     session.refresh(exam, attribute_names=["questions"])
     return exam
 
+
+
+@app.patch("/exams/{exam_id}/answer-key", response_model=ExamRead)
+def update_exam_answer_key(
+    exam_id: int,
+    payload: ExamAnswerKeyUpdate,
+    session: Session = Depends(_get_db),
+) -> Exam:
+    exam = session.get(Exam, exam_id)
+    if not exam:
+        raise HTTPException(status_code=404, detail="未找到对应考试")
+
+    if not payload.questions:
+        session.refresh(exam, attribute_names=["questions"])
+        return exam
+
+    question_ids = [item.question_id for item in payload.questions]
+    stmt = select(Question).where(Question.id.in_(question_ids))
+    questions = session.exec(stmt).all()
+    question_lookup = {question.id: question for question in questions if question.exam_id == exam_id}
+
+    missing = [qid for qid in question_ids if qid not in question_lookup]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"题目 {missing[0]} 未找到或不属于当前考试")
+
+    updated = False
+    for item in payload.questions:
+        question = question_lookup[item.question_id]
+        if item.answer_key is not None:
+            question.answer_key = item.answer_key
+            updated = True
+        if item.answer_status is not None:
+            question.answer_status = item.answer_status
+            updated = True
+        if item.answer_confidence is not None:
+            question.answer_confidence = item.answer_confidence
+            updated = True
+
+    if updated:
+        exam.answer_key_version += 1
+        session.add(exam)
+    session.commit()
+    session.refresh(exam, attribute_names=["questions"])
+    return exam
+
+
+@app.get("/grading/sessions/active", response_model=GradingSessionRead)
+def get_or_create_active_grading_session(
+    teacher_id: int,
+    session: Session = Depends(_get_db),
+) -> GradingSession:
+    teacher = session.get(Teacher, teacher_id)
+    if not teacher:
+        raise HTTPException(status_code=404, detail="未找到教师信息")
+
+    stmt = (
+        select(GradingSession)
+        .where(
+            GradingSession.teacher_id == teacher_id,
+            GradingSession.status == SessionStatus.active,
+        )
+        .order_by(GradingSession.updated_at.desc())
+    )
+    existing = session.exec(stmt).first()
+    if existing:
+        session.refresh(existing)
+        return existing
+
+    new_session = GradingSession(teacher_id=teacher_id)
+    session.add(new_session)
+    session.commit()
+    session.refresh(new_session)
+    return new_session
+
+
+@app.post("/grading/sessions", response_model=GradingSessionRead)
+def create_grading_session_endpoint(
+    payload: GradingSessionCreate,
+    session: Session = Depends(_get_db),
+) -> GradingSession:
+    stmt = (
+        select(GradingSession)
+        .where(
+            GradingSession.teacher_id == payload.teacher_id,
+            GradingSession.status == SessionStatus.active,
+        )
+        .order_by(GradingSession.updated_at.desc())
+    )
+    existing = session.exec(stmt).first()
+    if existing:
+        if payload.exam_id is not None:
+            existing.exam_id = payload.exam_id
+        if payload.payload is not None:
+            existing.payload = payload.payload
+        existing.status = SessionStatus.active
+        existing.updated_at = datetime.utcnow()
+        session.add(existing)
+        session.commit()
+        session.refresh(existing)
+        return existing
+
+    grading_session = GradingSession(
+        teacher_id=payload.teacher_id,
+        exam_id=payload.exam_id,
+        payload=payload.payload,
+    )
+    session.add(grading_session)
+    session.commit()
+    session.refresh(grading_session)
+    return grading_session
+
+
+@app.patch("/grading/sessions/{session_id}", response_model=GradingSessionRead)
+def update_grading_session_endpoint(
+    session_id: int,
+    payload: GradingSessionUpdate,
+    session: Session = Depends(_get_db),
+) -> GradingSession:
+    grading_session = session.get(GradingSession, session_id)
+    if not grading_session:
+        raise HTTPException(status_code=404, detail="未找到批改向导会话")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "current_step" in updates:
+        updates["current_step"] = min(5, max(1, int(updates["current_step"])))
+    if "status" in updates and updates["status"] is None:
+        updates.pop("status")
+
+    for key, value in updates.items():
+        setattr(grading_session, key, value)
+
+    grading_session.updated_at = datetime.utcnow()
+    session.add(grading_session)
+    session.commit()
+    session.refresh(grading_session)
+    return grading_session
 
 @app.post("/submissions", response_model=SubmissionDetail)
 def create_submission(payload: SubmissionCreate, session: Session = Depends(_get_db)) -> SubmissionDetail:
@@ -525,4 +722,17 @@ def download_practice_pdf(assignment_id: int, session: Session = Depends(_get_db
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF 文件不存在或已被删除")
     return FileResponse(str(pdf_path), filename=pdf_path.name)
+
+
+
+
+
+
+
+
+
+
+
+
+
 

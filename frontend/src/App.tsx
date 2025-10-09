@@ -8,6 +8,7 @@ import {
   CustomerServiceOutlined,
   HomeOutlined,
   UploadOutlined,
+  ApiOutlined,
 } from "@ant-design/icons";
 import {
   Avatar,
@@ -20,13 +21,16 @@ import {
   Modal,
   Space,
   Switch,
+  Tag,
   Tooltip,
   Typography,
   Upload,
   message,
 } from "antd";
 import type { UploadFile, UploadProps } from "antd/es/upload/interface";
+import type { ComponentType } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import AnalyticsCenter from "./pages/AnalyticsCenter";
 import Dashboard from "./pages/Dashboard";
 import MistakeCenter from "./pages/MistakeCenter";
@@ -34,23 +38,39 @@ import PracticeCenter from "./pages/PracticeCenter";
 import RosterSetup from "./pages/RosterSetup";
 import TeacherAssistant from "./pages/TeacherAssistant";
 import UploadCenter from "./pages/UploadCenter";
-import { submitTeacherFeedback } from "./api/services";
+import LlmConfigModal from "./components/LlmConfigModal";
+import { fetchAssistantStatus, submitTeacherFeedback } from "./api/services";
 import { NAVIGATE_EVENT } from "./utils/navigation";
+import GradingWizard from "./grading-wizard/GradingWizard";
+import { WizardProvider } from "./grading-wizard/WizardProvider";
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Paragraph, Text } = Typography;
 
 type NavKey = "dashboard" | "roster" | "upload" | "mistake" | "practice" | "analytics" | "assistant";
 
-const NAV_ITEMS: { key: NavKey; label: string; icon: React.ReactNode }[] = [
-  { key: "dashboard", label: "工作台", icon: <HomeOutlined /> },
-  { key: "roster", label: "班级搭建", icon: <ApartmentOutlined /> },
-  { key: "upload", label: "上传批改", icon: <CloudUploadOutlined /> },
-  { key: "mistake", label: "错题智库", icon: <BookOutlined /> },
-  { key: "practice", label: "练习派送", icon: <CheckCircleOutlined /> },
-  { key: "assistant", label: "AI教研助手", icon: <CustomerServiceOutlined /> },
-  { key: "analytics", label: "学情洞察", icon: <BarChartOutlined /> },
+type NavItem = {
+  key: NavKey;
+  label: string;
+  icon: React.ReactNode;
+  path: string;
+  component: ComponentType;
+};
+
+const NAV_ITEMS: NavItem[] = [
+  { key: "dashboard", label: "工作台", icon: <HomeOutlined />, path: "/dashboard", component: Dashboard },
+  { key: "roster", label: "班级搭建", icon: <ApartmentOutlined />, path: "/roster", component: RosterSetup },
+  { key: "upload", label: "上传批改", icon: <CloudUploadOutlined />, path: "/upload", component: UploadCenter },
+  { key: "mistake", label: "错题智库", icon: <BookOutlined />, path: "/mistake", component: MistakeCenter },
+  { key: "practice", label: "练习派送", icon: <CheckCircleOutlined />, path: "/practice", component: PracticeCenter },
+  { key: "assistant", label: "AI教研助手", icon: <CustomerServiceOutlined />, path: "/assistant", component: TeacherAssistant },
+  { key: "analytics", label: "学情洞察", icon: <BarChartOutlined />, path: "/analytics", component: AnalyticsCenter },
 ];
+
+const ROUTE_BY_KEY: Record<NavKey, string> = NAV_ITEMS.reduce((acc, item) => {
+  acc[item.key] = item.path;
+  return acc;
+}, {} as Record<NavKey, string>);
 
 const menuTitleMap: Record<NavKey, string> = {
   dashboard: "全局工作台",
@@ -82,16 +102,25 @@ type FeedbackFormValues = {
 const ALLOWED_FEEDBACK_TYPES: string[] = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024;
 
+const deriveActiveKey = (pathname: string): NavKey => {
+  const matched = NAV_ITEMS.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`));
+  return matched?.key ?? "dashboard";
+};
 
 const App = () => {
   const [collapsed, setCollapsed] = useState(false);
-  const [activeKey, setActiveKey] = useState<NavKey>("dashboard");
-
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackFiles, setFeedbackFiles] = useState<UploadFile[]>([]);
   const [feedbackAnonymous, setFeedbackAnonymous] = useState(false);
   const [feedbackForm] = Form.useForm<FeedbackFormValues>();
+  const [llmConfigVisible, setLlmConfigVisible] = useState(false);
+  const [llmStatus, setLlmStatus] = useState<"unknown" | "available" | "unavailable">("unknown");
+
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeKey = useMemo(() => deriveActiveKey(location.pathname), [location.pathname]);
+  const isWizardRoute = location.pathname.startsWith("/grading/wizard");
 
   const applyStoredFeedbackProfile = useCallback(() => {
     try {
@@ -124,130 +153,160 @@ const App = () => {
   useEffect(() => {
     const handler = (event: Event) => {
       const custom = event as CustomEvent<NavKey>;
-      if (custom.detail && NAV_ITEMS.some((item) => item.key === custom.detail)) {
-        setActiveKey(custom.detail);
+      if (custom.detail) {
+        const target = ROUTE_BY_KEY[custom.detail];
+        if (target) {
+          navigate(target);
+        }
       }
     };
 
     window.addEventListener(NAVIGATE_EVENT, handler);
     return () => window.removeEventListener(NAVIGATE_EVENT, handler);
+  }, [navigate]);
+
+  useEffect(() => {
+    const loadAssistantStatus = async () => {
+      try {
+        const { available } = await fetchAssistantStatus();
+        setLlmStatus(available ? "available" : "unavailable");
+      } catch (error) {
+        console.error(error);
+        setLlmStatus("unavailable");
+      }
+    };
+    void loadAssistantStatus();
   }, []);
 
+  const feedbackUploadProps: UploadProps = useMemo(
+    () => ({
+      multiple: true,
+      maxCount: 3,
+      accept: ".png,.jpg,.jpeg,.webp",
+      fileList: feedbackFiles,
+      beforeUpload: (file) => {
+        if (!ALLOWED_FEEDBACK_TYPES.includes(file.type)) {
+          message.error("仅支持上传 JPG/PNG/WebP 图片");
+          return Upload.LIST_IGNORE;
+        }
+        if (file.size > MAX_FEEDBACK_FILE_SIZE) {
+          message.error("单张图片需小于 3MB");
+          return Upload.LIST_IGNORE;
+        }
+        return false;
+      },
+      onChange: ({ fileList: newFileList }) => {
+        setFeedbackFiles(newFileList);
+      },
+      onRemove: (file) => {
+        setFeedbackFiles((prev) => prev.filter((item) => item.uid !== file.uid));
+        return true;
+      },
+    }),
+    [feedbackFiles],
+  );
 
-const feedbackUploadProps: UploadProps = useMemo(
-  () => ({
-    multiple: true,
-    maxCount: 3,
-    accept: ".png,.jpg,.jpeg,.webp",
-    fileList: feedbackFiles,
-    beforeUpload: (file) => {
-      if (!ALLOWED_FEEDBACK_TYPES.includes(file.type)) {
-        message.error("仅支持上传 JPG/PNG/WebP 图片");
-        return Upload.LIST_IGNORE;
-      }
-      if (file.size > MAX_FEEDBACK_FILE_SIZE) {
-        message.error("单张图片需小于 3MB");
-        return Upload.LIST_IGNORE;
-      }
-      return false;
-    },
-    onChange: ({ fileList: newFileList }) => {
-      setFeedbackFiles(newFileList);
-    },
-    onRemove: (file) => {
-      setFeedbackFiles((prev) => prev.filter((item) => item.uid !== file.uid));
-      return true;
-    },
-  }),
-  [feedbackFiles],
-);
-
-const handleFeedbackOpen = () => {
-  applyStoredFeedbackProfile();
-  setFeedbackFiles([]);
-  setFeedbackVisible(true);
-};
-
-const handleFeedbackCancel = () => {
-  setFeedbackVisible(false);
-};
-
-const handleFeedbackValuesChange = (_: FeedbackFormValues, allValues: FeedbackFormValues) => {
-  setFeedbackAnonymous(Boolean(allValues.is_anonymous));
-};
-
-const handleFeedbackFinish = async (values: FeedbackFormValues) => {
-  const trimmedContent = values.content?.trim() ?? "";
-  if (!trimmedContent) {
-    message.warning("请填写问题描述");
-    return;
-  }
-  const isAnonymous = Boolean(values.is_anonymous);
-  const formData = new FormData();
-  formData.append("content", trimmedContent);
-  formData.append("is_anonymous", String(isAnonymous));
-
-  const trimmedName = values.teacher_name?.trim();
-  const trimmedEmail = values.teacher_email?.trim();
-  if (!isAnonymous) {
-    if (trimmedName) {
-      formData.append("teacher_name", trimmedName);
-    }
-    if (trimmedEmail) {
-      formData.append("teacher_email", trimmedEmail);
-    }
-  }
-
-  feedbackFiles.forEach((file) => {
-    if (file.originFileObj) {
-      formData.append("attachments", file.originFileObj);
-    }
-  });
-
-  setFeedbackSubmitting(true);
-  try {
-    const response = await submitTeacherFeedback(formData);
-    if (!isAnonymous) {
-      localStorage.setItem(
-        "teacherFeedbackProfile",
-        JSON.stringify({ teacher_name: trimmedName ?? "", teacher_email: trimmedEmail ?? "" }),
-      );
-    }
-    message.success(`反馈已提交，编号 #${response.id}`);
-    setFeedbackVisible(false);
-    setFeedbackFiles([]);
+  const handleFeedbackOpen = () => {
     applyStoredFeedbackProfile();
-  } catch (error) {
-    const detail = (
-      (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-      (error instanceof Error ? error.message : "提交失败，请稍后重试")
-    );
-    message.error(detail);
-  } finally {
-    setFeedbackSubmitting(false);
-  }
-};
+    setFeedbackFiles([]);
+    setFeedbackVisible(true);
+  };
 
-  const content = useMemo(() => {
-    switch (activeKey) {
-      case "dashboard":
-        return <Dashboard />;
-      case "roster":
-        return <RosterSetup />;
-      case "upload":
-        return <UploadCenter />;
-      case "mistake":
-        return <MistakeCenter />;
-      case "practice":
-        return <PracticeCenter />;
-      case "assistant":
-        return <TeacherAssistant />;
-      case "analytics":
-        return <AnalyticsCenter />;
-      default:
-        return <Dashboard />;
+  const handleFeedbackCancel = () => {
+    setFeedbackVisible(false);
+  };
+
+  const handleFeedbackValuesChange = (_: FeedbackFormValues, allValues: FeedbackFormValues) => {
+    setFeedbackAnonymous(Boolean(allValues.is_anonymous));
+  };
+
+  const handleFeedbackFinish = async (values: FeedbackFormValues) => {
+    const trimmedContent = values.content?.trim() ?? "";
+    if (!trimmedContent) {
+      message.warning("请填写问题描述");
+      return;
     }
-  }, [activeKey]);
+    const isAnonymous = Boolean(values.is_anonymous);
+    const formData = new FormData();
+    formData.append("content", trimmedContent);
+    formData.append("is_anonymous", String(isAnonymous));
+
+    const trimmedName = values.teacher_name?.trim();
+    const trimmedEmail = values.teacher_email?.trim();
+    if (!isAnonymous) {
+      if (trimmedName) {
+        formData.append("teacher_name", trimmedName);
+      }
+      if (trimmedEmail) {
+        formData.append("teacher_email", trimmedEmail);
+      }
+    }
+
+    feedbackFiles.forEach((file) => {
+      if (file.originFileObj) {
+        formData.append("attachments", file.originFileObj);
+      }
+    });
+
+    setFeedbackSubmitting(true);
+    try {
+      const response = await submitTeacherFeedback(formData);
+      if (!isAnonymous) {
+        localStorage.setItem(
+          "teacherFeedbackProfile",
+          JSON.stringify({ teacher_name: trimmedName ?? "", teacher_email: trimmedEmail ?? "" }),
+        );
+      }
+      message.success(`反馈已提交，编号 #${response.id}`);
+      setFeedbackVisible(false);
+      setFeedbackFiles([]);
+      applyStoredFeedbackProfile();
+    } catch (error) {
+      const detail = (
+        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (error instanceof Error ? error.message : "提交失败，请稍后重试")
+      );
+      message.error(detail);
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  };
+
+  if (isWizardRoute) {
+    return (
+      <ConfigProvider
+        locale={zhCN}
+        theme={{
+          token: {
+            colorPrimary: "#2563eb",
+            borderRadiusLG: 18,
+            fontFamily: '"SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif',
+          },
+          components: {
+            Layout: {
+              headerBg: "transparent",
+              siderBg: "transparent",
+              bodyBg: "transparent",
+            },
+            Menu: {
+              colorItemBg: "transparent",
+              itemSelectedColor: "#1d4ed8",
+              itemSelectedBg: "rgba(37,99,235,0.12)",
+              itemHoverBg: "rgba(37,99,235,0.08)",
+              radiusItem: 12,
+            },
+            Button: {
+              borderRadius: 12,
+            },
+          },
+        }}
+      >
+        <WizardProvider>
+          <GradingWizard />
+        </WizardProvider>
+      </ConfigProvider>
+    );
+  }
 
   return (
     <ConfigProvider
@@ -309,7 +368,12 @@ const handleFeedbackFinish = async (values: FeedbackFormValues) => {
             theme="light"
             mode="inline"
             selectedKeys={[activeKey]}
-            onClick={({ key }) => setActiveKey(key as NavKey)}
+            onClick={({ key }) => {
+              const target = ROUTE_BY_KEY[key as NavKey];
+              if (target) {
+                navigate(target);
+              }
+            }}
             style={{
               background: "transparent",
               padding: collapsed ? "0 12px" : "0 18px",
@@ -350,13 +414,28 @@ const handleFeedbackFinish = async (values: FeedbackFormValues) => {
                 {menuDescriptionMap[activeKey]}
               </Paragraph>
             </Space>
-            <Space size={12}>
-              <Button type="text" onClick={() => setActiveKey("dashboard")}>回到工作台</Button>
-              <Button type="primary" shape="round" onClick={() => setActiveKey("upload")}>立即批改</Button>
+            <Space size={12} align="center">
+              {llmStatus !== "unknown" && (
+                <Tag color={llmStatus === "available" ? "success" : "warning"}>
+                  {llmStatus === "available" ? "API 已配置" : "API 待配置"}
+                </Tag>
+              )}
+              <Button icon={<ApiOutlined />} onClick={() => setLlmConfigVisible(true)}>配置 API Key</Button>
+              <Button type="text" onClick={() => navigate("/dashboard")}>回到工作台</Button>
+              <Button type="primary" shape="round" onClick={() => navigate("/upload")}>立即批改</Button>
             </Space>
           </Header>
           <Content className="app-content">
-            <div className="app-content-wrapper fade-in">{content}</div>
+            <div className="app-content-wrapper fade-in">
+              <Routes>
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                {NAV_ITEMS.map((item) => {
+                  const Component = item.component;
+                  return <Route key={item.key} path={item.path} element={<Component />} />;
+                })}
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Routes>
+            </div>
           </Content>
           <Footer className="app-footer">
             <Text type="secondary">
@@ -365,6 +444,14 @@ const handleFeedbackFinish = async (values: FeedbackFormValues) => {
           </Footer>
         </Layout>
       </Layout>
+      <LlmConfigModal
+        open={llmConfigVisible}
+        onClose={() => setLlmConfigVisible(false)}
+        onUpdated={(status) => {
+          setLlmStatus(status.available ? "available" : "unavailable");
+        }}
+      />
+
       <Modal
         title="反馈教学痛点"
         open={feedbackVisible}
@@ -426,4 +513,3 @@ const handleFeedbackFinish = async (values: FeedbackFormValues) => {
 };
 
 export default App;
-

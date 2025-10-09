@@ -1,15 +1,21 @@
-﻿import type {
+
+import type {
   AnalyticsSummary,
   AssistantChatResponse,
   AssistantMessage,
   LLMConfigStatus,
   Classroom,
   Exam,
+  ExamDraftResponse,
+  GradingSession,
   Mistake,
-  PracticeAssignment,
   Student,
+  PracticeAssignment,
+  ProcessingLogList,
   SubmissionDetail,
+  SubmissionHistoryEntry,
   SubmissionProcessingResult,
+  SubmissionResponse,
   Teacher,
   TeacherFeedback,
 } from "../types";
@@ -60,7 +66,7 @@ export const createStudent = async (payload: {
   email?: string;
   grade_level?: string;
 }) => {
-  const { data } = await apiClient.post<Student>("/students", payload);
+  const { data } = await apiClient.post("/students", payload);
   return data;
 };
 
@@ -73,12 +79,51 @@ export const createEnrollment = async (payload: {
 };
 
 export const createExam = async (payload: unknown) => {
-  const { data } = await apiClient.post("/exams", payload);
+  const { data } = await apiClient.post<Exam>("/exams", payload);
   return data;
 };
 
 export const fetchExams = async () => {
   const { data } = await apiClient.get<Exam[]>("/exams");
+  return data;
+};
+
+export const fetchExamDraft = async (formData: FormData) => {
+  const { data } = await apiClient.post<ExamDraftResponse>("/exams/draft", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+};
+
+export const updateExamAnswerKey = async (examId: number, payload: unknown) => {
+  const { data } = await apiClient.patch<Exam>(`/exams/${examId}/answer-key`, payload);
+  return data;
+};
+
+export const createGradingSession = async (payload: {
+  teacher_id: number;
+  exam_id?: number;
+  payload?: Record<string, unknown>;
+}) => {
+  const { data } = await apiClient.post<GradingSession>("/grading/sessions", payload);
+  return data;
+};
+
+export const fetchActiveGradingSession = async (teacherId: number) => {
+  const { data } = await apiClient.get<GradingSession>("/grading/sessions/active", {
+    params: { teacher_id: teacherId },
+  });
+  return data;
+};
+
+export const updateGradingSession = async (
+  sessionId: number,
+  payload: Partial<Pick<GradingSession, "current_step" | "status" | "exam_id">> & {
+    payload?: Record<string, unknown> | null;
+    last_error?: string | null;
+  },
+) => {
+  const { data } = await apiClient.patch<GradingSession>(`/grading/sessions/${sessionId}`, payload);
   return data;
 };
 
@@ -94,8 +139,38 @@ export const fetchSubmission = async (id: number) => {
   return data;
 };
 
-export const fetchSubmissions = async (params: { exam_id?: number; student_id?: number } = {}) => {
+export const fetchSubmissions = async (params: {
+  exam_id?: number;
+  student_id?: number;
+  status?: string;
+} = {}) => {
   const { data } = await apiClient.get<SubmissionDetail[]>("/submissions", { params });
+  return data;
+};
+
+export const fetchSubmissionHistory = async (params: {
+  exam_id?: number;
+  student_id?: number;
+  status?: string;
+  limit?: number;
+} = {}) => {
+  const { data } = await apiClient.get<SubmissionHistoryEntry[]>("/submissions/history", { params });
+  return data;
+};
+
+
+export const updateManualScore = async (payload: {
+  response_id: number;
+  new_score: number;
+  new_comment?: string;
+  override_annotation?: Record<string, unknown> | null;
+}) => {
+  const { data } = await apiClient.post<SubmissionResponse>(`/responses/manual-score`, payload);
+  return data;
+};
+
+export const fetchSubmissionLogs = async (submissionId: number) => {
+  const { data } = await apiClient.get<ProcessingLogList>(`/submissions/${submissionId}/logs`);
   return data;
 };
 
@@ -158,7 +233,6 @@ export const askTeachingAssistant = async (
   return data;
 };
 
-
 export const fetchAssistantStatus = async () => {
   const { data } = await apiClient.get<LLMConfigStatus>("/assistant/status");
   return data;
@@ -174,11 +248,9 @@ export const updateAssistantConfig = async (payload: {
   return data;
 };
 
-
 export const submitTeacherFeedback = async (formData: FormData) => {
   const { data } = await apiClient.post<TeacherFeedback>("/feedback/teacher", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;
 };
-

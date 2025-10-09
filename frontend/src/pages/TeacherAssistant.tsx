@@ -6,7 +6,6 @@ import {
   Card,
   Col,
   Divider,
-  Form,
   Input,
   InputNumber,
   Modal,
@@ -27,8 +26,9 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import PageLayout from "../components/PageLayout";
+import LlmConfigModal from "../components/LlmConfigModal";
 import type { AssistantMessage } from "../types";
-import { fetchAssistantStatus, updateAssistantConfig } from "../api/services";
+import { fetchAssistantStatus } from "../api/services";
 
 type ChatTuning = {
   temperature: number;
@@ -66,8 +66,6 @@ const TeacherAssistant = () => {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [llmStatus, setLlmStatus] = useState<"unknown" | "available" | "unavailable">("unknown");
   const [configVisible, setConfigVisible] = useState(false);
-  const [configLoading, setConfigLoading] = useState(false);
-  const [configForm] = Form.useForm();
   const [tuningVisible, setTuningVisible] = useState(false);
   const [chatTuning, setChatTuning] = useState<ChatTuning>(defaultTuning);
   const [pendingTuning, setPendingTuning] = useState<ChatTuning>(defaultTuning);
@@ -89,28 +87,6 @@ const TeacherAssistant = () => {
       streamControllerRef.current?.abort();
     };
   }, [refreshLlmStatus]);
-
-  const handleConfigSubmit = async () => {
-    try {
-      const values = await configForm.validateFields();
-      setConfigLoading(true);
-      const status = await updateAssistantConfig(values);
-      message.success("模型配置已更新");
-      setConfigVisible(false);
-      configForm.resetFields();
-      setLlmStatus(status.available ? "available" : "unavailable");
-    } catch (error) {
-      if ((error as { errorFields?: unknown })?.errorFields) {
-        return;
-      }
-      console.error(error);
-      const detail =
-        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      message.error(detail ?? "配置保存失败，请稍后重试");
-    } finally {
-      setConfigLoading(false);
-    }
-  };
 
   const handleTuningChange = (field: keyof ChatTuning) => (value: number | null) => {
     if (typeof value !== "number" || Number.isNaN(value)) {
@@ -392,7 +368,6 @@ const TeacherAssistant = () => {
                 ghost
                 icon={<SettingOutlined />}
                 onClick={() => {
-                  configForm.resetFields();
                   setConfigVisible(true);
                 }}
               >
@@ -543,51 +518,14 @@ const TeacherAssistant = () => {
         </Col>
       </Row>
 
-      <Modal
-        title="配置大模型 API 接入"
+
+      <LlmConfigModal
         open={configVisible}
-        onCancel={() => {
-          configForm.resetFields();
-          setConfigVisible(false);
+        onClose={() => setConfigVisible(false)}
+        onUpdated={(status) => {
+          setLlmStatus(status.available ? "available" : "unavailable");
         }}
-        onOk={() => {
-          void handleConfigSubmit();
-        }}
-        okText="保存配置"
-        confirmLoading={configLoading}
-        destroyOnClose
-      >
-        <Form form={configForm} layout="vertical">
-          <Form.Item
-            label="API Key"
-            name="api_key"
-            rules={[{ required: true, message: "请输入 API Key" }]}
-          >
-            <Input.Password placeholder="请输入 DashScope API Key" autoComplete="new-password" allowClear />
-          </Form.Item>
-          <Form.Item
-            label="Base URL"
-            name="base_url"
-            extra="可选，留空则使用 DashScope 兼容模式默认地址"
-          >
-            <Input placeholder="例如：https://dashscope.aliyuncs.com/compatible-mode/v1" allowClear />
-          </Form.Item>
-          <Form.Item
-            label="文本模型"
-            name="text_model"
-            extra="可选，例如 qwen-max"
-          >
-            <Input placeholder="模型名称" allowClear />
-          </Form.Item>
-          <Form.Item
-            label="视觉模型"
-            name="vision_model"
-            extra="可选，例如 qwen3-vl-plus"
-          >
-            <Input placeholder="模型名称" allowClear />
-          </Form.Item>
-        </Form>
-      </Modal>
+      />
 
       <Modal
         title="对话参数调节"

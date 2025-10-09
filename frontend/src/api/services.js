@@ -39,6 +39,30 @@ export const fetchExams = async () => {
     const { data } = await apiClient.get("/exams");
     return data;
 };
+export const fetchExamDraft = async (formData) => {
+    const { data } = await apiClient.post("/exams/draft", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+    });
+    return data;
+};
+export const updateExamAnswerKey = async (examId, payload) => {
+    const { data } = await apiClient.patch(`/exams/${examId}/answer-key`, payload);
+    return data;
+};
+export const createGradingSession = async (payload) => {
+    const { data } = await apiClient.post("/grading/sessions", payload);
+    return data;
+};
+export const fetchActiveGradingSession = async (teacherId) => {
+    const { data } = await apiClient.get("/grading/sessions/active", {
+        params: { teacher_id: teacherId },
+    });
+    return data;
+};
+export const updateGradingSession = async (sessionId, payload) => {
+    const { data } = await apiClient.patch(`/grading/sessions/${sessionId}`, payload);
+    return data;
+};
 export const uploadSubmission = async (payload) => {
     const { data } = await apiClient.post("/submissions/upload", payload, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -51,6 +75,18 @@ export const fetchSubmission = async (id) => {
 };
 export const fetchSubmissions = async (params = {}) => {
     const { data } = await apiClient.get("/submissions", { params });
+    return data;
+};
+export const fetchSubmissionHistory = async (params = {}) => {
+    const { data } = await apiClient.get("/submissions/history", { params });
+    return data;
+};
+export const updateManualScore = async (payload) => {
+    const { data } = await apiClient.post(`/responses/manual-score`, payload);
+    return data;
+};
+export const fetchSubmissionLogs = async (submissionId) => {
+    const { data } = await apiClient.get(`/submissions/${submissionId}/logs`);
     return data;
 };
 export const fetchStudentMistakes = async (studentId) => {

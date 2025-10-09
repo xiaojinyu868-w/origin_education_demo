@@ -7,13 +7,15 @@
   RocketOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Badge, Button, Card, Col, Empty, Row, Space, Spin, Statistic, Typography } from "antd";
+import { Alert, Badge, Button, Card, Col, Empty, Row, Space, Spin, Statistic, Typography } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { AnalyticsSummary, SubmissionDetail } from "../types";
+import { useNavigate } from "react-router-dom";
+import type { AnalyticsSummary, SubmissionDetail, GradingSession } from "../types";
 import {
   bootstrapDemo,
+  fetchActiveGradingSession,
   fetchAnalytics,
   fetchClassrooms,
   fetchExams,
@@ -76,6 +78,7 @@ const quickActions: QuickAction[] = [
 ];
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<OverviewCounts>({
     teachers: 0,
@@ -86,6 +89,7 @@ const Dashboard = () => {
   });
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
   const [submissions, setSubmissions] = useState<SubmissionDetail[]>([]);
+  const [activeSession, setActiveSession] = useState<GradingSession | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -107,6 +111,14 @@ const Dashboard = () => {
       setSubmissions(submissionsList.slice(0, 6));
       const analyticsData = await fetchAnalytics({});
       setAnalytics(analyticsData);
+
+      const firstTeacherId = teachers[0]?.id;
+      if (firstTeacherId) {
+        const session = await fetchActiveGradingSession(firstTeacherId).catch(() => null);
+        setActiveSession(session);
+      } else {
+        setActiveSession(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -151,16 +163,50 @@ const Dashboard = () => {
     <Spin spinning={loading} tip="正在加载最新学情数据…">
       <Space direction="vertical" size={24} style={{ width: "100%" }}>
         <Card bordered={false} className="shadow-panel" bodyStyle={{ padding: 28 }}>
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
-              <div>
-                <Title level={3} style={{ marginBottom: 8 }}>
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
+              <Space direction="vertical" size={14} style={{ maxWidth: 620 }}>
+                <Title level={3} style={{ marginBottom: 0 }}>
                   欢迎回来，让教学工作始终领先一步
                 </Title>
                 <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                  自动批改、错题诊断、练习派送与学情洞察，都在这一张工作台里完成。
+                  从上传试卷到导出报告，系统将引导您完成整个批改闭环。
                 </Paragraph>
-              </div>
+                <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                  点击下方按钮即可唤起沉浸式批改向导，随时中断亦能自动续航。
+                </Paragraph>
+                <Space size={12} wrap>
+                  <Button
+                    type="primary"
+                    size="large"
+                    shape="round"
+                    icon={<RocketOutlined style={{ marginRight: 6 }} />}
+                    onClick={() => navigate("/grading/wizard?step=1")}
+                  >
+                    开始新一轮批改
+                  </Button>
+                  <Button size="large" shape="round" onClick={() => emitNavigation("upload")}>
+                    查看上传中心
+                  </Button>
+                </Space>
+                {activeSession && activeSession.status === "active" && (
+                  <Alert
+                    showIcon
+                    type="info"
+                    message="检测到未完成的批改流程"
+                    description={`当前停留在第 ${activeSession.current_step} 步，可随时继续。`}
+                    action={
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={() => navigate(`/grading/wizard?step=${Math.max(1, Math.min(5, activeSession.current_step ?? 1))}`)}
+                      >
+                        继续批改
+                      </Button>
+                    }
+                  />
+                )}
+              </Space>
               <Space>
                 <Button onClick={() => loadData()}>刷新数据</Button>
                 <Button type="primary" onClick={handleBootstrap}>
