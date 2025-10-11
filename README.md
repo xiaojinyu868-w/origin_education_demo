@@ -142,6 +142,8 @@ Vite 已配置代理，前端访问 `/api/*` 会转发至 FastAPI。
 
 ## 接口速览
 - `POST /bootstrap/demo`：写入示例教师/班级/学生/考试数据。
+- `POST /bootstrap/clear`：清空数据库数据并删除生成的演示素材。
+- `POST /bootstrap/demo/refresh`：重置数据库并重新生成完整演示数据。
 - `POST /submissions/upload`：上传试卷图片并触发自动批改。
 - `GET /students/{id}/mistakes`：获取学生错题列表。
 - `POST /practice` / `GET /practice` / `POST /practice/complete`：生成、查询、更新练习任务。
@@ -156,3 +158,5 @@ Vite 已配置代理，前端访问 `/api/*` 会转发至 FastAPI。
 当前为校内测试版本，正式上线前请根据校方要求补充隐私与合规条款。
 
 
+## 文档 / Docs
+- Upload Center 历史回放 / Upload Center History Playback: `docs/upload-center-history.md`

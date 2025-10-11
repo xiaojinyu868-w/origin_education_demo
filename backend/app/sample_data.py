@@ -123,13 +123,15 @@ def ensure_exam(session: Session, teacher: Teacher, classroom: Classroom) -> Exa
     session.refresh(exam, attribute_names=["questions"])
     return exam
 
+def ensure_demo_dataset(session: Session) -> tuple[Teacher, Classroom, list[Student], Exam]:
+    teacher = ensure_teacher(session, "演示教师", "demo.teacher@example.com")
+    classroom = ensure_classroom(session, teacher, "九年级一班（演示）")
+    students = ensure_students(session, classroom)
+    exam = ensure_exam(session, teacher, classroom)
+    return teacher, classroom, students, exam
 
 if __name__ == "__main__":
     init_db()
     with Session(engine) as session:
-        teacher = ensure_teacher(session, "Ms. Liu", "liu.teacher@example.com")
-        classroom = ensure_classroom(session, teacher, "Grade 9 - Class 1")
-        ensure_students(session, classroom)
-        ensure_exam(session, teacher, classroom)
+        ensure_demo_dataset(session)
         print("Demo data ready.")
-

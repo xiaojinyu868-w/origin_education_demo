@@ -21,16 +21,29 @@ import type {
 } from "../types";
 import { apiClient } from "./client";
 
-export const bootstrapDemo = async () => {
-  const { data } = await apiClient.post("/bootstrap/demo");
-  return data as {
-    message: string;
-    teacher_id: number;
-    classroom_id: number;
-    student_ids: number[];
-    exam_id: number;
-  };
+type DemoBootstrapResult = {
+  message: string;
+  teacher_id: number;
+  classroom_id: number;
+  student_ids: number[];
+  exam_id: number;
 };
+
+
+export const bootstrapDemo = async () => {
+  const { data } = await apiClient.post<DemoBootstrapResult>("/bootstrap/demo");
+  return data;
+};
+export const refreshDemoData = async () => {
+  const { data } = await apiClient.post<DemoBootstrapResult>("/bootstrap/demo/refresh");
+  return data;
+};
+
+export const clearAllData = async () => {
+  const { data } = await apiClient.post<{ message: string }>("/bootstrap/clear");
+  return data;
+};
+
 
 export const fetchTeachers = async () => {
   const { data } = await apiClient.get<Teacher[]>("/teachers");

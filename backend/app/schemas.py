@@ -6,7 +6,14 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from .models import AnswerStatus, PracticeStatus, QuestionType, ResponseReviewStatus, SessionStatus, SubmissionStatus
+from .models import (
+    AnswerStatus,
+    PracticeStatus,
+    QuestionType,
+    ResponseReviewStatus,
+    SessionStatus,
+    SubmissionStatus,
+)
 
 
 class StudentBase(BaseModel):
@@ -296,6 +303,25 @@ class ProcessingStep(BaseModel):
     detail: Optional[str] = None
 
 
+class ProcessingLogRead(BaseModel):
+    id: int
+    submission_id: int
+    step: str
+    actor_type: str
+    actor_id: Optional[int] = None
+    detail: Optional[str] = None
+    ai_trace_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ProcessingLogList(BaseModel):
+    items: List[ProcessingLogRead]
+
+
 class SubmissionProcessingResult(BaseModel):
     submission: SubmissionRead
     responses: List[ResponseRead]
@@ -303,6 +329,8 @@ class SubmissionProcessingResult(BaseModel):
     ocr_rows: List[OCRResult]
     processing_steps: List[ProcessingStep] = Field(default_factory=list)
     ai_summary: Optional[str] = None
+    matching_score: Optional[float] = None
+    processing_logs: Optional[List[ProcessingLogRead]] = None
 
 
 class ManualScoreUpdate(BaseModel):
@@ -368,6 +396,14 @@ class LLMConfigUpdate(BaseModel):
 
 class LLMConfigStatus(BaseModel):
     available: bool
+
+
+class SubmissionHistoryEntry(BaseModel):
+    submission: SubmissionRead
+    student: StudentRead
+    exam: Optional[ExamRead] = None
+    processing_steps: List[ProcessingStep] = Field(default_factory=list)
+    matching_score: Optional[float] = None
 
 
 

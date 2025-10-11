@@ -78,6 +78,11 @@ def apply_lightweight_migrations() -> None:
             connection.exec_driver_sql("ALTER TABLE submission ADD COLUMN ai_trace_id TEXT")
 
 
+def reset_database() -> None:
+    SQLModel.metadata.drop_all(engine)
+    init_db()
+
+
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:

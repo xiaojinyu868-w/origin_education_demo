@@ -3,6 +3,14 @@ export const bootstrapDemo = async () => {
     const { data } = await apiClient.post("/bootstrap/demo");
     return data;
 };
+export const refreshDemoData = async () => {
+    const { data } = await apiClient.post("/bootstrap/demo/refresh");
+    return data;
+};
+export const clearAllData = async () => {
+    const { data } = await apiClient.post("/bootstrap/clear");
+    return data;
+};
 export const fetchTeachers = async () => {
     const { data } = await apiClient.get("/teachers");
     return data;

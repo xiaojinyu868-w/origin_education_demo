@@ -7,14 +7,14 @@
   RocketOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Alert, Badge, Button, Card, Col, Empty, Row, Space, Spin, Statistic, Typography } from "antd";
+import { Alert, Badge, Button, Card, Col, Empty, Modal, Row, Space, Spin, Statistic, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AnalyticsSummary, SubmissionDetail, GradingSession } from "../types";
 import {
-  bootstrapDemo,
+  clearAllData,
   fetchActiveGradingSession,
   fetchAnalytics,
   fetchClassrooms,
@@ -22,6 +22,7 @@ import {
   fetchStudents,
   fetchSubmissions,
   fetchTeachers,
+  refreshDemoData,
 } from "../api/services";
 import QuickActionCard from "../components/QuickActionCard";
 import PageLayout from "../components/PageLayout";
@@ -128,14 +129,44 @@ const Dashboard = () => {
     void loadData();
   }, [loadData]);
 
-  const handleBootstrap = async () => {
-    setLoading(true);
-    try {
-      await bootstrapDemo();
-    } finally {
-      await loadData();
-    }
-  };
+  const runMaintenance = useCallback(
+    async (operation: () => Promise<unknown>, successMessage: string) => {
+      setLoading(true);
+      try {
+        await operation();
+        message.success(successMessage);
+      } catch (error) {
+        const description =
+          error instanceof Error ? error.message : "操作失败，请稍后重试";
+        message.error(description);
+        throw error;
+      } finally {
+        await loadData();
+      }
+    },
+    [loadData],
+  );
+
+  const handleRefreshDemo = useCallback(() => {
+    Modal.confirm({
+      title: "重新生成演示数据",
+      content: "系统会清空当前数据并写入全新的演示样例，确定要继续吗？",
+      okText: "重新生成",
+      cancelText: "取消",
+      onOk: () => runMaintenance(refreshDemoData, "演示数据已重新生成"),
+    });
+  }, [runMaintenance]);
+
+  const handleClearData = useCallback(() => {
+    Modal.confirm({
+      title: "清空全部数据",
+      content: "该操作会删除所有教师、学生、考试与提交记录，且无法恢复。是否确认？",
+      okText: "立即清空",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: () => runMaintenance(clearAllData, "所有数据已清空"),
+    });
+  }, [runMaintenance]);
 
   const timeline = useMemo(() => {
     if (!submissions.length) {
@@ -208,9 +239,14 @@ const Dashboard = () => {
                 )}
               </Space>
               <Space>
-                <Button onClick={() => loadData()}>刷新数据</Button>
-                <Button type="primary" onClick={handleBootstrap}>
-                  一键生成演示数据
+                <Button onClick={() => loadData()} disabled={loading}>
+                  刷新数据
+                </Button>
+                <Button type="primary" onClick={handleRefreshDemo} disabled={loading}>
+                  重新生成演示数据
+                </Button>
+                <Button danger onClick={handleClearData} disabled={loading}>
+                  清空全部数据
                 </Button>
               </Space>
             </Space>

@@ -75,6 +75,32 @@ const pickWizardStep = (submission: SubmissionDetail): number => {
   return 5;
 };
 
+const resolveStatusColor = (status?: string | null) => {
+  const value = (status ?? "").toLowerCase();
+  if (value === "error") return "red";
+  if (value === "warning") return "orange";
+  if (value === "success") return "green";
+  return "blue";
+};
+
+const resolveStepColor = (status?: string | null) => resolveStatusColor(status);
+
+const resolveLogColor = (log: ProcessingLog) => {
+  const metadataStatus = typeof log.metadata?.status === "string" ? log.metadata?.status : undefined;
+  const base = resolveStatusColor(metadataStatus);
+  if (base === "blue") {
+    if (log.actor_type === "assistant") return "geekblue";
+    if (log.actor_type === "teacher") return "purple";
+  }
+  return base;
+};
+
+const translateActorType = (actorType: string) => {
+  if (actorType === "teacher") return "Teacher";
+  if (actorType === "assistant") return "AI";
+  return "System";
+};
+
 const UploadCenter = () => {
   const navigate = useNavigate();
   const [exams, setExams] = useState<Exam[]>([]);
@@ -379,7 +405,11 @@ const UploadCenter = () => {
                       </Text>
                       <Space size={8} wrap>
                         {steps.slice(0, 4).map((step, index) => (
-                          <Tag key={`${submission.id}-${index}`} color="geekblue" style={{ marginBottom: 4 }}>
+                          <Tag
+                            key={`${submission.id}-${index}`}
+                            color={resolveStepColor(step.status)}
+                            style={{ marginBottom: 4 }}
+                          >
                             {step.name}
                           </Tag>
                         ))}
@@ -436,7 +466,8 @@ const UploadCenter = () => {
                     <List.Item key={log.id}>
                       <Space direction="vertical" size={4} style={{ width: "100%" }}>
                         <Space align="center" size={8}>
-                          <Badge color="blue" text={log.step} />
+                          <Badge color={resolveLogColor(log)} text={log.step} />
+                          <Tag bordered={false}>{translateActorType(log.actor_type)}</Tag>
                           <Text type="secondary">{dayjs(log.created_at).format("MM-DD HH:mm")}</Text>
                         </Space>
                         {log.detail && <Text>{log.detail}</Text>}

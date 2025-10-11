@@ -226,6 +226,14 @@ class Submission(SQLModel, table=True):
         back_populates="submission",
         sa_relationship=relationship("Response", back_populates="submission"),
     )
+    processing_logs: list["ProcessingLog"] = Relationship(
+        back_populates="submission",
+        sa_relationship=relationship(
+            "ProcessingLog",
+            back_populates="submission",
+            cascade="all, delete-orphan",
+        ),
+    )
 
 
 class Response(SQLModel, table=True):
@@ -333,6 +341,23 @@ class TeacherFeedback(SQLModel, table=True):
     teacher: Optional["Teacher"] = Relationship(
         back_populates="feedbacks",
         sa_relationship=relationship("Teacher", back_populates="feedbacks"),
+    )
+
+
+class ProcessingLog(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    submission_id: int = Field(foreign_key="submission.id", index=True)
+    step: str = Field(index=True)
+    actor_type: str = Field(default="system", index=True)
+    actor_id: Optional[int] = Field(default=None, index=True)
+    detail: Optional[str] = None
+    ai_trace_id: Optional[str] = Field(default=None, index=True)
+    extra: Optional[dict] = Field(default=None, sa_column=Column("metadata", JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    submission: Optional["Submission"] = Relationship(
+        back_populates="processing_logs",
+        sa_relationship=relationship("Submission", back_populates="processing_logs"),
     )
 
 

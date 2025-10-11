@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import mimetypes
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Iterator, List, Optional
@@ -11,7 +12,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
-from .database import get_session, init_db
+from .database import engine, get_session, init_db, reset_database
+from .sample_data import ensure_demo_dataset
 from .models import (
     ClassEnrollment,
     Classroom,
@@ -21,6 +23,8 @@ from .models import (
     PracticeStatus,
     Question,
     SessionStatus,
+    SubmissionStatus,
+    ProcessingLog,
     Response,
     Student,
     Submission,
@@ -49,6 +53,8 @@ from .schemas import (
     MistakeRead,
     OCRResult,
     ProcessingStep,
+    ProcessingLogList,
+    ProcessingLogRead,
     PracticeAssignmentCreate,
     PracticeAssignmentRead,
     PracticeCompletionUpdate,
@@ -58,6 +64,7 @@ from .schemas import (
     SubmissionCreate,
     SubmissionDetail,
     SubmissionProcessingResult,
+    SubmissionHistoryEntry,
     SubmissionRead,
     TeacherCreate,
     TeacherFeedbackCreate,
@@ -80,11 +87,52 @@ from .services.ocr import OCRProcessingError, run_ocr_pipeline
 from .services.practice import generate_practice_assignment
 from uuid import uuid4
 
-FEEDBACK_STORAGE_DIR = (Path(__file__).resolve().parent / "generated" / "feedback")
-EXAM_DRAFT_STORAGE_DIR = (Path(__file__).resolve().parent / "generated" / "exams")
+GENERATED_ROOT_DIR = Path(__file__).resolve().parent / "generated"
+FEEDBACK_STORAGE_DIR = GENERATED_ROOT_DIR / "feedback"
+EXAM_DRAFT_STORAGE_DIR = GENERATED_ROOT_DIR / "exams"
 ALLOWED_FEEDBACK_MIME_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 MAX_FEEDBACK_ATTACHMENTS = 3
 MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024
+
+
+def _cleanup_generated_assets() -> None:
+    if GENERATED_ROOT_DIR.exists():
+        for item in GENERATED_ROOT_DIR.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
+    GENERATED_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _build_demo_payload(
+    teacher: Teacher,
+    classroom: Classroom,
+    students: list[Student],
+    exam: Exam,
+    message: str,
+) -> dict[str, object]:
+    return {
+        "message": message,
+        "teacher_id": teacher.id,
+        "classroom_id": classroom.id,
+        "student_ids": [student.id for student in students],
+        "exam_id": exam.id,
+    }
+
+
+def _serialize_processing_log(log: ProcessingLog) -> ProcessingLogRead:
+    return ProcessingLogRead(
+        id=log.id,
+        submission_id=log.submission_id,
+        step=log.step,
+        actor_type=log.actor_type,
+        actor_id=log.actor_id,
+        detail=log.detail,
+        ai_trace_id=log.ai_trace_id,
+        metadata=log.extra,
+        created_at=log.created_at,
+    )
 
 
 app = FastAPI(title="AI-Assisted Exam Analytics Platform")
@@ -418,6 +466,86 @@ def list_submissions(
     return [SubmissionDetail.model_validate(item) for item in submissions]
 
 
+@app.get("/submissions/history", response_model=List[SubmissionHistoryEntry])
+def list_submission_history(
+    exam_id: Optional[int] = None,
+    student_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 20,
+    session: Session = Depends(_get_db),
+) -> List[SubmissionHistoryEntry]:
+    safe_limit = max(1, min(limit or 20, 100))
+    stmt = (
+        select(Submission)
+        .options(
+            selectinload(Submission.student),
+            selectinload(Submission.responses),
+            selectinload(Submission.exam).selectinload(Exam.questions),
+        )
+    )
+    if exam_id is not None:
+        stmt = stmt.where(Submission.exam_id == exam_id)
+    if student_id is not None:
+        stmt = stmt.where(Submission.student_id == student_id)
+    if status:
+        try:
+            stmt = stmt.where(Submission.status == SubmissionStatus(status))
+        except ValueError:
+            pass
+    stmt = stmt.order_by(Submission.submitted_at.desc()).limit(safe_limit)
+
+    submissions = session.exec(stmt).all()
+    history_entries: List[SubmissionHistoryEntry] = []
+    for submission in submissions:
+        student = submission.student or session.get(Student, submission.student_id)
+        if student is None:
+            continue
+
+        extra = submission.extra_metadata if isinstance(submission.extra_metadata, dict) else {}
+        raw_steps = extra.get("processing_steps", [])
+        step_payloads: List[ProcessingStep] = []
+        if isinstance(raw_steps, list):
+            for step in raw_steps:
+                if not isinstance(step, dict):
+                    continue
+                name = str(step.get("name") or "Processing Step")
+                status_value = str(step.get("status") or "success").lower()
+                if status_value not in {"success", "warning", "error"}:
+                    status_value = "success"
+                detail = step.get("detail")
+                try:
+                    step_payloads.append(
+                        ProcessingStep(
+                            name=name,
+                            status=status_value,  # type: ignore[arg-type]
+                            detail=detail,
+                        ),
+                    )
+                except ValueError:
+                    continue
+
+        raw_matching = extra.get("matching_score")
+        matching_value = None
+        if isinstance(raw_matching, (int, float)):
+            matching_value = max(0.0, min(float(raw_matching), 1.0))
+
+        exam_payload = None
+        if submission.exam is not None:
+            exam_payload = ExamRead.model_validate(submission.exam)
+
+        history_entries.append(
+            SubmissionHistoryEntry(
+                submission=SubmissionRead.model_validate(submission),
+                student=StudentRead.model_validate(student),
+                exam=exam_payload,
+                processing_steps=step_payloads,
+                matching_score=matching_value,
+            ),
+        )
+
+    return history_entries
+
+
 @app.get("/submissions/{submission_id}", response_model=SubmissionDetail)
 def get_submission(submission_id: int, session: Session = Depends(_get_db)) -> SubmissionDetail:
     submission = session.get(Submission, submission_id)
@@ -466,12 +594,92 @@ async def upload_submission(
     session.refresh(submission)
     session.refresh(submission, attribute_names=["responses"])
 
-    submission_schema = SubmissionRead.model_validate(submission)
     responses_schema = [ResponseRead.model_validate(item) for item in grading_artifacts.responses]
     mistakes_schema = [MistakeRead.model_validate(item) for item in grading_artifacts.mistakes]
     ocr_schema = [OCRResult.model_validate(item) for item in ocr_rows]
-    combined_steps = ocr_steps + [step.as_dict() for step in grading_artifacts.steps]
-    step_schemas = [ProcessingStep(**step) for step in combined_steps]
+
+    combined_steps_raw = []
+    for step in ocr_steps:
+        if isinstance(step, dict):
+            combined_steps_raw.append(step)
+    for step in grading_artifacts.steps:
+        combined_steps_raw.append(step.as_dict())
+
+    normalized_steps: List[dict[str, Optional[str]]] = []
+    for raw_step in combined_steps_raw:
+        if not isinstance(raw_step, dict):
+            continue
+        name = str(raw_step.get("name") or "Processing Step")
+        status = str(raw_step.get("status") or "success").lower()
+        if status not in {"success", "warning", "error"}:
+            status = "success"
+        normalized_steps.append(
+            {
+                "name": name,
+                "status": status,
+                "detail": raw_step.get("detail"),
+            },
+        )
+
+    unique_numbers = {
+        str(row.get("question_number")).strip()
+        for row in ocr_rows
+        if isinstance(row, dict) and row.get("question_number")
+    }
+    total_questions = len(exam.questions or [])
+    matching_score: Optional[float] = None
+    if total_questions:
+        matching_score = min(1.0, len(unique_numbers) / total_questions) if unique_numbers else 0.0
+
+    extra_metadata = submission.extra_metadata.copy() if isinstance(submission.extra_metadata, dict) else {}
+    extra_metadata.update(
+        {
+            "processing_steps": normalized_steps,
+            "matching_score": matching_score,
+        },
+    )
+    if grading_artifacts.ai_summary:
+        extra_metadata["ai_summary"] = grading_artifacts.ai_summary
+    submission.extra_metadata = extra_metadata
+    session.add(submission)
+    session.commit()
+    session.refresh(submission, attribute_names=["responses"])
+
+    existing_logs = session.exec(
+        select(ProcessingLog).where(ProcessingLog.submission_id == submission.id),
+    ).all()
+    for log in existing_logs:
+        session.delete(log)
+    session.flush()
+
+    for step in normalized_steps:
+        log = ProcessingLog(
+            submission_id=submission.id,
+            step=step["name"],
+            actor_type="system",
+            detail=step.get("detail"),
+            extra={"status": step.get("status")},
+        )
+        session.add(log)
+    if grading_artifacts.ai_summary:
+        session.add(
+            ProcessingLog(
+                submission_id=submission.id,
+                step="AI Summary",
+                actor_type="assistant",
+                detail=grading_artifacts.ai_summary,
+            ),
+        )
+    session.commit()
+
+    submission_schema = SubmissionRead.model_validate(submission)
+    step_schemas = [ProcessingStep(**step) for step in normalized_steps]
+    log_records = session.exec(
+        select(ProcessingLog)
+        .where(ProcessingLog.submission_id == submission.id)
+        .order_by(ProcessingLog.created_at.asc()),
+    ).all()
+    log_schemas = [_serialize_processing_log(item) for item in log_records]
 
     return SubmissionProcessingResult(
         submission=submission_schema,
@@ -480,7 +688,27 @@ async def upload_submission(
         ocr_rows=ocr_schema,
         processing_steps=step_schemas,
         ai_summary=grading_artifacts.ai_summary,
+        matching_score=matching_score,
+        processing_logs=log_schemas,
     )
+
+
+@app.get("/submissions/{submission_id}/logs", response_model=ProcessingLogList)
+def list_submission_logs(
+    submission_id: int,
+    session: Session = Depends(_get_db),
+) -> ProcessingLogList:
+    submission = session.get(Submission, submission_id)
+    if submission is None:
+        raise HTTPException(status_code=404, detail="未找到对应的提交记录")
+
+    stmt = (
+        select(ProcessingLog)
+        .where(ProcessingLog.submission_id == submission_id)
+        .order_by(ProcessingLog.created_at.asc())
+    )
+    logs = session.exec(stmt).all()
+    return ProcessingLogList(items=[_serialize_processing_log(item) for item in logs])
 
 
 @app.post("/responses/manual-score", response_model=ResponseRead)
@@ -512,6 +740,20 @@ def update_manual_score(
         submission.total_score = sum(scored) if scored else submission.total_score
         session.add(submission)
         session.commit()
+
+    log_entry = ProcessingLog(
+        submission_id=response.submission_id,
+        step="Teacher Review",
+        actor_type="teacher",
+        detail=f"Adjusted question {response.question_id} score to {payload.new_score}",
+        extra={
+            "response_id": response.id,
+            "new_score": payload.new_score,
+            "comment": payload.new_comment,
+        },
+    )
+    session.add(log_entry)
+    session.commit()
 
     return ResponseRead.model_validate(response)
 
@@ -699,18 +941,28 @@ async def submit_teacher_feedback(
 def bootstrap_demo(session: Session = Depends(_get_db)):
     """初始化一份演示数据，便于测试前端流程。"""
 
-    teacher = ensure_teacher(session, "演示教师", "demo.teacher@example.com")
-    classroom = ensure_classroom(session, teacher, "九年级一班（演示）")
-    students = ensure_students(session, classroom)
-    exam = ensure_exam(session, teacher, classroom)
+    teacher, classroom, students, exam = ensure_demo_dataset(session)
+    return _build_demo_payload(teacher, classroom, students, exam, "演示数据已准备就绪")
 
-    return {
-        "message": "演示数据已准备就绪",
-        "teacher_id": teacher.id,
-        "classroom_id": classroom.id,
-        "student_ids": [student.id for student in students],
-        "exam_id": exam.id,
-    }
+
+@app.post("/bootstrap/clear")
+def clear_all_data() -> dict[str, str]:
+    """清空数据库并移除生成的演示文件。"""
+
+    _cleanup_generated_assets()
+    reset_database()
+    return {"message": "所有数据已清空"}
+
+
+@app.post("/bootstrap/demo/refresh")
+def refresh_demo_data() -> dict[str, object]:
+    """重置数据库并重新生成演示数据。"""
+
+    _cleanup_generated_assets()
+    reset_database()
+    with Session(engine) as session:
+        teacher, classroom, students, exam = ensure_demo_dataset(session)
+    return _build_demo_payload(teacher, classroom, students, exam, "演示数据已重新生成")
 
 
 @app.get("/practice/{assignment_id}/pdf")
@@ -722,17 +974,3 @@ def download_practice_pdf(assignment_id: int, session: Session = Depends(_get_db
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF 文件不存在或已被删除")
     return FileResponse(str(pdf_path), filename=pdf_path.name)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
