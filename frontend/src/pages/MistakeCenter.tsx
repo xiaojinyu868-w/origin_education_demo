@@ -20,10 +20,13 @@ import {
   fetchStudentMistakes,
 } from "../api/services";
 import PageLayout from "../components/PageLayout";
+import useResponsive from "../hooks/useResponsive";
 
 const { Paragraph, Title, Text } = Typography;
 
 const MistakeCenter = () => {
+  const { isMobile, isTablet } = useResponsive();
+  const isCompact = isMobile || isTablet;
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<number | null>(null);
   const [mistakes, setMistakes] = useState<Mistake[]>([]);
@@ -97,7 +100,7 @@ const MistakeCenter = () => {
             value={selectedStudent ?? undefined}
             onChange={(value) => void loadStudentData(value)}
             options={students.map((student) => ({ value: student.id, label: student.name }))}
-            style={{ width: 280 }}
+            style={{ width: isCompact ? "100%" : 280 }}
           />
           {mistakes.length === 0 ? (
             <Empty
@@ -106,7 +109,9 @@ const MistakeCenter = () => {
             />
           ) : (
             <List
-              bordered
+              bordered={false}
+              split={false}
+              className="mistake-list"
               dataSource={mistakes}
               renderItem={(item) => (
                 <List.Item>
@@ -133,15 +138,41 @@ const MistakeCenter = () => {
         title="生成错题练习"
         description="输入知识点关键词即可组合针对性练习，系统会同步生成 PDF 版本。"
       >
-        <Form layout="inline" onFinish={handleCreatePractice}>
-          <Form.Item name="knowledge_filters" label="关键词">
-            <Input allowClear placeholder="例如：一次函数, 二次函数" style={{ width: 260 }} />
+        <Form
+          layout={isCompact ? "vertical" : "inline"}
+          onFinish={handleCreatePractice}
+          style={{ width: "100%" }}
+        >
+          <Form.Item
+            name="knowledge_filters"
+            label="关键词"
+            style={{ width: isCompact ? "100%" : "auto" }}
+          >
+            <Input
+              allowClear
+              placeholder="例如：一次函数, 二次函数"
+              style={{ width: isCompact ? "100%" : 260 }}
+            />
           </Form.Item>
-          <Form.Item name="max_items" label="题量">
-            <Input type="number" placeholder="默认 10" style={{ width: 120 }} />
+          <Form.Item
+            name="max_items"
+            label="题量"
+            style={{ width: isCompact ? "100%" : "auto" }}
+          >
+            <Input
+              type="number"
+              placeholder="默认 10"
+              style={{ width: isCompact ? "100%" : 120 }}
+            />
           </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" loading={loading} disabled={!selectedStudent}>
+          <Form.Item style={{ width: isCompact ? "100%" : "auto" }}>
+            <Button
+              block={isCompact}
+              type="primary"
+              htmlType="submit"
+              loading={loading}
+              disabled={!selectedStudent}
+            >
               生成练习
             </Button>
           </Form.Item>
@@ -174,7 +205,9 @@ const MistakeCenter = () => {
         description="追踪练习派送与完成情况，可一键标记状态并下载 PDF。"
       >
         <List
-          bordered
+          bordered={false}
+          split={false}
+          className="assignment-list"
           dataSource={assignments}
           locale={{ emptyText: "暂无练习任务" }}
           renderItem={(item) => (

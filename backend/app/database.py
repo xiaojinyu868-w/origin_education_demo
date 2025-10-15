@@ -77,6 +77,18 @@ def apply_lightweight_migrations() -> None:
         if "ai_trace_id" not in submission_columns:
             connection.exec_driver_sql("ALTER TABLE submission ADD COLUMN ai_trace_id TEXT")
 
+        mistake_columns = _column_names("mistake")
+        if "error_count" not in mistake_columns:
+            connection.exec_driver_sql("ALTER TABLE mistake ADD COLUMN error_count INTEGER DEFAULT 1")
+            connection.exec_driver_sql("UPDATE mistake SET error_count = COALESCE(error_count, 1)")
+        if "data_status" not in mistake_columns:
+            connection.exec_driver_sql("ALTER TABLE mistake ADD COLUMN data_status VARCHAR DEFAULT 'complete'")
+            connection.exec_driver_sql(
+                "UPDATE mistake SET data_status = COALESCE(data_status, 'complete')",
+            )
+        if "root_cause" not in mistake_columns:
+            connection.exec_driver_sql("ALTER TABLE mistake ADD COLUMN root_cause TEXT")
+
 
 def reset_database() -> None:
     SQLModel.metadata.drop_all(engine)

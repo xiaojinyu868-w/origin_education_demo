@@ -19,6 +19,7 @@ import StepAnswerReview from "./steps/StepAnswerReview";
 import StepStudentUpload from "./steps/StepStudentUpload";
 import StepReviewConfirm from "./steps/StepReviewConfirm";
 import StepCompletion from "./steps/StepCompletion";
+import useResponsive from "../hooks/useResponsive";
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -34,6 +35,8 @@ const WIZARD_STEPS = [
 const GradingWizard = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { isMobile, isTablet } = useResponsive();
+  const isCompact = isMobile || isTablet;
   const {
     state: { initializing, step, error },
     actions: { initialize, clearError, goToStep },
@@ -152,7 +155,7 @@ const GradingWizard = () => {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "0 32px",
+          padding: isCompact ? "0 16px" : "0 32px",
           background: "#f8fafc",
           borderBottom: "1px solid #e2e8f0",
         }}
@@ -160,18 +163,20 @@ const GradingWizard = () => {
         <Space size={16} align="center">
           <img src="/logo.svg" alt="logo" style={{ width: 40, height: 40 }} />
           <div>
-            <Title level={4} style={{ margin: 0 }}>
+            <Title level={isCompact ? 5 : 4} style={{ margin: 0 }}>
               批改流程向导
             </Title>
             <Text type="secondary">从试卷配置到导出，一站式完成批改闭环</Text>
           </div>
         </Space>
-        <Button type="text" onClick={() => navigate("/dashboard")}>退出向导</Button>
+        <Button type="text" onClick={() => navigate("/dashboard")} block={isCompact}>
+          閫€鍑哄悜瀵?
+        </Button>
       </Header>
-      <Content style={{ padding: "32px 48px", background: "linear-gradient(180deg,#f8fafc 0%,#ffffff 100%)" }}>
-        <Space direction="vertical" size={24} style={{ width: "100%" }}>
+      <Content style={{ padding: isCompact ? "24px 16px" : "32px 48px", background: "linear-gradient(180deg,#f8fafc 0%,#ffffff 100%)" }}>
+        <Space direction="vertical" size={isCompact ? 20 : 24} style={{ width: "100%" }}>
           <Breadcrumb items={breadcrumbItems} />
-          <Steps current={step - 1} items={stepItems} responsive onChange={handleStepChange} />
+          <Steps current={step - 1} items={stepItems} responsive onChange={handleStepChange} direction={isCompact ? "vertical" : "horizontal"} size={isCompact ? "small" : "default"} />
           {error && (
             <Alert
               type="error"
@@ -181,7 +186,7 @@ const GradingWizard = () => {
               showIcon
             />
           )}
-          <div style={{ minHeight: 420, background: "#fff", borderRadius: 20, padding: 32, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }}>
+          <div style={{ minHeight: 420, background: "#fff", borderRadius: 20, padding: isCompact ? 20 : 32, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }}>
             {initializing ? (
               <div style={{ display: "flex", height: 356, alignItems: "center", justifyContent: "center" }}>
                 <Space direction="vertical" align="center">

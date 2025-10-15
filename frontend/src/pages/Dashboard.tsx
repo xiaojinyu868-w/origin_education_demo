@@ -2,12 +2,11 @@
   ApartmentOutlined,
   BarChartOutlined,
   CloudUploadOutlined,
-  HeartOutlined,
   ReadOutlined,
   RocketOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Alert, Badge, Button, Card, Col, Empty, Modal, Row, Space, Spin, Statistic, Typography, message } from "antd";
+import { Alert, Button, Card, Col, Empty, Modal, Row, Space, Spin, Statistic, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -27,6 +26,7 @@ import {
 import QuickActionCard from "../components/QuickActionCard";
 import PageLayout from "../components/PageLayout";
 import { emitNavigation } from "../utils/navigation";
+import useResponsive from "../hooks/useResponsive";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -80,6 +80,8 @@ const quickActions: QuickAction[] = [
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { isMobile, isTablet } = useResponsive();
+  const isCompact = isMobile || isTablet;
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<OverviewCounts>({
     teachers: 0,
@@ -193,11 +195,16 @@ const Dashboard = () => {
   return (
     <Spin spinning={loading} tip="正在加载最新学情数据…">
       <Space direction="vertical" size={24} style={{ width: "100%" }}>
-        <Card bordered={false} className="shadow-panel" bodyStyle={{ padding: 28 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
-              <Space direction="vertical" size={14} style={{ maxWidth: 620 }}>
-                <Title level={3} style={{ marginBottom: 0 }}>
+        <Card bordered={false} className="shadow-panel" bodyStyle={{ padding: isCompact ? 24 : 28 }}>
+          <Space direction="vertical" size={isCompact ? 20 : 16} style={{ width: "100%" }}>
+            <Space
+              direction={isCompact ? "vertical" : "horizontal"}
+              align="start"
+              style={{ justifyContent: "space-between", width: "100%" }}
+              size={isCompact ? 16 : 24}
+            >
+              <Space direction="vertical" size={14} style={{ flex: 1, maxWidth: isCompact ? "100%" : 620 }}>
+                <Title level={isCompact ? 4 : 3} style={{ marginBottom: 0 }}>
                   欢迎回来，让教学工作始终领先一步
                 </Title>
                 <Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -206,22 +213,29 @@ const Dashboard = () => {
                 <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                   点击下方按钮即可唤起沉浸式批改向导，随时中断亦能自动续航。
                 </Paragraph>
-                <Space size={12} wrap>
+                <Space wrap size={12} style={{ width: isCompact ? "100%" : "auto" }}>
                   <Button
+                    block={isCompact}
                     type="primary"
-                    size="large"
+                    size={isCompact ? "middle" : "large"}
                     shape="round"
                     icon={<RocketOutlined style={{ marginRight: 6 }} />}
                     onClick={() => navigate("/grading/wizard?step=1")}
                   >
                     开始新一轮批改
                   </Button>
-                  <Button size="large" shape="round" onClick={() => emitNavigation("upload")}>
+                  <Button
+                    block={isCompact}
+                    size={isCompact ? "middle" : "large"}
+                    shape="round"
+                    onClick={() => emitNavigation("upload")}
+                  >
                     查看上传中心
                   </Button>
                 </Space>
                 {activeSession && activeSession.status === "active" && (
                   <Alert
+                    className="shadow-panel"
                     showIcon
                     type="info"
                     message="检测到未完成的批改流程"
@@ -238,56 +252,49 @@ const Dashboard = () => {
                   />
                 )}
               </Space>
-              <Space>
-                <Button onClick={() => loadData()} disabled={loading}>
+              <Space
+                wrap
+                size={isCompact ? 12 : 16}
+                style={{ width: isCompact ? "100%" : "auto", justifyContent: isCompact ? "flex-start" : "flex-end" }}
+              >
+                <Button block={isCompact} onClick={() => loadData()} disabled={loading}>
                   刷新数据
                 </Button>
-                <Button type="primary" onClick={handleRefreshDemo} disabled={loading}>
+                <Button block={isCompact} type="primary" onClick={handleRefreshDemo} disabled={loading}>
                   重新生成演示数据
                 </Button>
-                <Button danger onClick={handleClearData} disabled={loading}>
+                <Button block={isCompact} danger onClick={handleClearData} disabled={loading}>
                   清空全部数据
                 </Button>
               </Space>
             </Space>
 
-            <Row gutter={[24, 24]}>
-              <Col xs={12} md={6}>
-                <Card className="shadow-panel" bordered={false}>
-                  <Statistic title="在岗教师" value={overview.teachers} suffix="人" />
+            <div className="stats-grid">
+              {[
+                { title: "在岗教师", value: overview.teachers, suffix: "人" },
+                { title: "教学班级", value: overview.classrooms, suffix: "个" },
+                { title: "参与学生", value: overview.students, suffix: "人" },
+                { title: "已批改试卷", value: overview.submissions, suffix: "份" },
+              ].map((item) => (
+                <Card key={item.title} className="shadow-panel" bordered={false}>
+                  <Statistic title={item.title} value={item.value} suffix={item.suffix} />
                 </Card>
-              </Col>
-              <Col xs={12} md={6}>
-                <Card className="shadow-panel" bordered={false}>
-                  <Statistic title="教学班级" value={overview.classrooms} suffix="个" />
-                </Card>
-              </Col>
-              <Col xs={12} md={6}>
-                <Card className="shadow-panel" bordered={false}>
-                  <Statistic title="参与学生" value={overview.students} suffix="人" />
-                </Card>
-              </Col>
-              <Col xs={12} md={6}>
-                <Card className="shadow-panel" bordered={false}>
-                  <Statistic title="已批改试卷" value={overview.submissions} suffix="份" />
-                </Card>
-              </Col>
-            </Row>
+              ))}
+            </div>
           </Space>
         </Card>
 
-        <Row gutter={[24, 24]}>
+        <div className={`quick-actions-grid ${isCompact ? "quick-actions-grid--compact" : ""}`}>
           {quickActions.map((action) => (
-            <Col xs={24} md={12} xl={6} key={action.key}>
-              <QuickActionCard
-                icon={action.icon}
-                title={action.title}
-                description={action.description}
-                onClick={() => emitNavigation(action.key)}
-              />
-            </Col>
+            <QuickActionCard
+              key={action.key}
+              icon={action.icon}
+              title={action.title}
+              description={action.description}
+              onClick={() => emitNavigation(action.key)}
+            />
           ))}
-        </Row>
+        </div>
 
         <Row gutter={[24, 24]} align="stretch">
           <Col xs={24} xl={14}>

@@ -27,6 +27,7 @@ import type { Exam, ExamDraftResponse, Question } from "../../types";
 import { createExam, fetchAssistantStatus, fetchExamDraft } from "../../api/services";
 import { useWizardStore } from "../useWizardStore";
 import LlmConfigModal from "../../components/LlmConfigModal";
+import useResponsive from "../../hooks/useResponsive";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -100,6 +101,8 @@ const StepExamConfig = () => {
     state: { teachers, teacherId, exams, examsLoading, selectedExamId, savingStep },
     actions: { refreshExams, selectExam, setTeacher, goToStep },
   } = useWizardStore();
+  const { isMobile, isTablet } = useResponsive();
+  const isCompact = isMobile || isTablet;
 
   const [draftModalOpen, setDraftModalOpen] = useState(false);
   const [draftPreview, setDraftPreview] = useState<ExamDraftResponse | null>(null);
@@ -267,16 +270,29 @@ const StepExamConfig = () => {
 
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Space direction="vertical" size={8}>
-          <Title level={3} style={{ marginBottom: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: isCompact ? "column" : "row",
+          justifyContent: "space-between",
+          alignItems: isCompact ? "flex-start" : "center",
+          gap: isCompact ? 16 : 24,
+        }}
+      >
+        <Space direction="vertical" size={8} style={{ flex: 1, maxWidth: isCompact ? "100%" : 620 }}>
+          <Title level={isCompact ? 4 : 3} style={{ marginBottom: 0 }}>
             选择试卷，开启批改旅程
           </Title>
           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
             从已有试卷中快速进入批改，或上传扫描件让 AI 自动解析结构。
           </Paragraph>
         </Space>
-        <Space size={12} align="center">
+        <Space
+          size={12}
+          align="center"
+          wrap
+          style={{ width: isCompact ? "100%" : "auto", justifyContent: isCompact ? "flex-start" : "flex-end" }}
+        >
           {teachers.length === 0 ? (
             <Alert
               type="warning"
@@ -286,7 +302,7 @@ const StepExamConfig = () => {
             />
           ) : (
             <Select
-              style={{ width: 220 }}
+              style={{ width: isCompact ? "100%" : 220 }}
               placeholder="选择负责教师"
               value={teacherId ?? undefined}
               options={teacherOptions}
@@ -303,10 +319,16 @@ const StepExamConfig = () => {
             onClick={() => {
               setConfigVisible(true);
             }}
+            block={isCompact}
           >
             配置大模型
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => refreshExams()} loading={examsLoading}>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => refreshExams()}
+            loading={examsLoading}
+            block={isCompact}
+          >
             刷新列表
           </Button>
           <Button
@@ -314,6 +336,7 @@ const StepExamConfig = () => {
             icon={<PlusOutlined />}
             onClick={() => setDraftModalOpen(true)}
             disabled={!teacherId || !llmReady}
+            block={isCompact}
           >
             新建试卷
           </Button>
@@ -339,7 +362,7 @@ const StepExamConfig = () => {
       )}
 
 
-      <Row gutter={24} wrap>
+      <Row gutter={[24, 24]} wrap>
         <Col xs={24} xl={14}>
           <Card title="选择已有试卷" bodyStyle={{ padding: 0 }} style={{ borderRadius: 20 }}>
             <div style={{ padding: 20 }}>
@@ -488,8 +511,8 @@ const StepExamConfig = () => {
                   <Space direction="vertical" size={16} style={{ width: "100%" }}>
                     {fields.map((field, index) => (
                       <Card key={field.key} type="inner" title={`题目 ${index + 1}`} style={{ borderRadius: 16 }}>
-                        <Row gutter={16}>
-                          <Col span={12}>
+                        <Row gutter={[16, 16]}>
+                          <Col xs={24} md={12}>
                             <Form.Item
                               name={[field.name, "number"]}
                               label="题号"
@@ -498,7 +521,7 @@ const StepExamConfig = () => {
                               <Input placeholder="例如：1" />
                             </Form.Item>
                           </Col>
-                          <Col span={12}>
+                          <Col xs={24} md={12}>
                             <Form.Item
                               name={[field.name, "type"]}
                               label="题型"
@@ -515,8 +538,8 @@ const StepExamConfig = () => {
                         >
                           <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder="请输入题干" />
                         </Form.Item>
-                        <Row gutter={16}>
-                          <Col span={12}>
+                        <Row gutter={[16, 16]}>
+                          <Col xs={24} md={12}>
                             <Form.Item
                               name={[field.name, "max_score"]}
                               label="分值"
@@ -525,7 +548,7 @@ const StepExamConfig = () => {
                               <InputNumber min={0} style={{ width: "100%" }} />
                             </Form.Item>
                           </Col>
-                          <Col span={12}>
+                          <Col xs={24} md={12}>
                             <Form.Item name={[field.name, "knowledge_tags"]} label="知识点标签">
                               <Input placeholder="多个标签以逗号分隔" />
                             </Form.Item>

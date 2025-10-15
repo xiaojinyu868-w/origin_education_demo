@@ -14,10 +14,9 @@ const StepCompletion = () => {
       await goToStep(1, { examId: selectedExamId });
       navigate("/grading/wizard?step=1");
     } catch (error) {
-      const detail = (
+      const detail =
         (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (error instanceof Error ? error.message : "Unable to restart the wizard")
-      );
+        (error instanceof Error ? error.message : "无法重新开始向导");
       message.error(detail);
     }
   };
@@ -25,14 +24,14 @@ const StepCompletion = () => {
   return (
     <Result
       status="success"
-      title="Grading session completed"
-      subTitle="The results have been saved to history. Export reports or assign follow-up practice whenever you are ready."
+      title="批改流程完成"
+      subTitle="结果已保存到历史，可随时导出报告或安排后续练习。"
       extra={
         <Space>
-          <Button type="primary" onClick={() => navigate("/upload")}>Open grading history</Button>
-          <Button onClick={() => navigate("/practice")}>Assign practice</Button>
-          <Button onClick={() => navigate("/dashboard")}>Back to dashboard</Button>
-          <Button type="link" onClick={handleRestart}>Start another run</Button>
+          <Button type="primary" onClick={() => navigate("/upload")}>查看批改历史</Button>
+          <Button onClick={() => navigate("/practice")}>前往布置练习</Button>
+          <Button onClick={() => navigate("/dashboard")}>返回总览</Button>
+          <Button type="link" onClick={handleRestart}>重新开始流程</Button>
         </Space>
       }
     />

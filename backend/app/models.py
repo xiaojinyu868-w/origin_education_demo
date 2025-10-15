@@ -66,6 +66,30 @@ class Student(SQLModel, table=True):
         back_populates="student",
         sa_relationship=relationship("PracticeAssignment", back_populates="student"),
     )
+    profile: Optional["StudentProfile"] = Relationship(
+        back_populates="student",
+        sa_relationship=relationship("StudentProfile", back_populates="student", uselist=False),
+    )
+    mistake_analyses: list["MistakeAnalysis"] = Relationship(
+        back_populates="student",
+        sa_relationship=relationship("MistakeAnalysis", back_populates="student"),
+    )
+
+
+class StudentProfile(SQLModel, table=True):
+    student_id: int = Field(foreign_key="student.id", primary_key=True)
+    study_goal: Optional[str] = None
+    teacher_notes: Optional[str] = None
+    contact_info: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    profile_status: str = Field(default="complete", index=True)
+    latest_mistake_stats: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_by: Optional[int] = Field(default=None, index=True)
+
+    student: Student = Relationship(
+        back_populates="profile",
+        sa_relationship=relationship("Student", back_populates="profile"),
+    )
 
 
 class Teacher(SQLModel, table=True):
@@ -278,6 +302,9 @@ class Mistake(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_seen_at: datetime = Field(default_factory=datetime.utcnow)
     times_practiced: int = Field(default=0)
+    error_count: int = Field(default=1, index=True)
+    data_status: str = Field(default="complete", index=True)
+    root_cause: Optional[str] = None
 
     student: Optional["Student"] = Relationship(
         back_populates="mistake_sets",
@@ -326,6 +353,22 @@ class PracticeItem(SQLModel, table=True):
         sa_relationship=relationship("Mistake"),
     )
 
+
+class MistakeAnalysis(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="student.id", index=True)
+    context_meta: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    context_snapshot: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    llm_summary: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    status: str = Field(default="success", index=True)
+    error_message: Optional[str] = None
+    created_by: Optional[int] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    student: Student = Relationship(
+        back_populates="mistake_analyses",
+        sa_relationship=relationship("Student", back_populates="mistake_analyses"),
+    )
 
 class TeacherFeedback(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

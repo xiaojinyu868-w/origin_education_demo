@@ -44,6 +44,7 @@ import type {
   SubmissionHistoryEntry,
   Student,
 } from "../types";
+import useResponsive from "../hooks/useResponsive";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -96,13 +97,15 @@ const resolveLogColor = (log: ProcessingLog) => {
 };
 
 const translateActorType = (actorType: string) => {
-  if (actorType === "teacher") return "Teacher";
+  if (actorType === "teacher") return "教师";
   if (actorType === "assistant") return "AI";
-  return "System";
+  return "系统";
 };
 
 const UploadCenter = () => {
   const navigate = useNavigate();
+  const { isMobile, isTablet } = useResponsive();
+  const isCompact = isMobile || isTablet;
   const [exams, setExams] = useState<Exam[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [filters, setFilters] = useState<{ examId?: number; studentId?: number; status?: string }>({});
@@ -229,25 +232,26 @@ const UploadCenter = () => {
         <div
           style={{
             display: "flex",
-            flexWrap: "wrap",
-            gap: 32,
+            flexDirection: isCompact ? "column" : "row",
+            gap: isCompact ? 24 : 32,
             justifyContent: "space-between",
-            alignItems: "center",
-            padding: "36px 40px",
+            alignItems: isCompact ? "flex-start" : "center",
+            padding: isCompact ? "28px 24px" : "36px 40px",
             background: "linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%)",
           }}
         >
-          <Space direction="vertical" size={12} style={{ maxWidth: 640 }}>
-            <Title level={3} style={{ margin: 0 }}>
+          <Space direction="vertical" size={12} style={{ maxWidth: isCompact ? "100%" : 640 }}>
+            <Title level={isCompact ? 4 : 3} style={{ margin: 0 }}>
               上传批改中心
             </Title>
             <Paragraph type="secondary" style={{ marginBottom: 0 }}>
               将上传、复核、导出拆解为五个步骤，保证每一次批改都有迹可循。点击下方按钮即可回到沉浸式批改向导。
             </Paragraph>
-            <Space size={12} wrap>
+            <Space size={12} wrap style={{ width: isCompact ? "100%" : "auto" }}>
               <Button
+                block={isCompact}
                 type="primary"
-                size="large"
+                size={isCompact ? "middle" : "large"}
                 shape="round"
                 icon={<CloudUploadOutlined />}
                 onClick={() => navigate(`/grading/wizard?step=1`)}
@@ -255,7 +259,8 @@ const UploadCenter = () => {
                 开始新一轮批改
               </Button>
               <Button
-                size="large"
+                block={isCompact}
+                size={isCompact ? "middle" : "large"}
                 shape="round"
                 icon={<FileSearchOutlined />}
                 onClick={() => loadHistory()}
@@ -265,7 +270,7 @@ const UploadCenter = () => {
               </Button>
             </Space>
             {sessionLoading ? (
-              <Spin size="small" />
+              <Spin size="small" aria-live="polite" />
             ) : (
               activeSession && activeSession.status === "active" && (
                 <Alert
@@ -290,7 +295,7 @@ const UploadCenter = () => {
             bordered={false}
             style={{
               borderRadius: 20,
-              width: 280,
+              width: isCompact ? "100%" : 280,
               background: "rgba(37, 99, 235, 0.08)",
               border: "1px solid rgba(37, 99, 235, 0.16)",
               boxShadow: "0 18px 42px rgba(37, 99, 235, 0.15)",
@@ -314,38 +319,48 @@ const UploadCenter = () => {
       </Card>
 
       <Card bordered={false} style={{ borderRadius: 20 }}>
-        <Form layout="inline" style={{ rowGap: 12 }}>
-          <Form.Item label="试卷">
+        <Form
+          layout={isCompact ? "vertical" : "inline"}
+          style={{ rowGap: 12, width: "100%" }}
+        >
+          <Form.Item label="试卷" style={{ width: isCompact ? "100%" : "auto" }}>
             <Select
-              style={{ width: 200 }}
+              style={{ width: isCompact ? "100%" : 200 }}
               value={filters.examId}
               options={examOptions as { value: number | undefined; label: string }[]}
               onChange={(value) => setFilters((prev) => ({ ...prev, examId: value }))}
             />
           </Form.Item>
-          <Form.Item label="学生">
+          <Form.Item label="学生" style={{ width: isCompact ? "100%" : "auto" }}>
             <Select
-              style={{ width: 200 }}
+              style={{ width: isCompact ? "100%" : 200 }}
               value={filters.studentId}
               showSearch
               options={studentOptions as { value: number | undefined; label: string }[]}
               onChange={(value) => setFilters((prev) => ({ ...prev, studentId: value }))}
             />
           </Form.Item>
-          <Form.Item label="状态">
+          <Form.Item label="状态" style={{ width: isCompact ? "100%" : "auto" }}>
             <Select
-              style={{ width: 160 }}
+              style={{ width: isCompact ? "100%" : 160 }}
               value={filters.status}
               options={STATUS_OPTIONS}
               onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}
             />
           </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type="primary" icon={<FileSearchOutlined />} onClick={() => loadHistory()} loading={historyLoading}>
+          <Form.Item style={{ width: isCompact ? "100%" : "auto" }}>
+            <Space style={{ width: isCompact ? "100%" : "auto" }} wrap={isCompact}>
+              <Button
+                block={isCompact}
+                type="primary"
+                icon={<FileSearchOutlined />}
+                onClick={() => loadHistory()}
+                loading={historyLoading}
+              >
                 查询
               </Button>
               <Button
+                block={isCompact}
                 icon={<ReloadOutlined />}
                 onClick={() => {
                   setFilters({});
@@ -359,11 +374,12 @@ const UploadCenter = () => {
       </Card>
 
       <PageLayout title="批改历史回放" description="最近的批改记录会沉淀在此处，可快速查看详情或继续补批。">
-        <Spin spinning={historyLoading}>
+        <Spin spinning={historyLoading} tip="加载历史记录..." aria-live="polite">
           {history.length === 0 ? (
             <Empty description="暂无历史记录，立即发起第一轮批改吧！" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ) : (
             <List
+              className="history-list"
               itemLayout="vertical"
               dataSource={history}
               renderItem={(entry) => {
@@ -371,7 +387,6 @@ const UploadCenter = () => {
                 return (
                   <List.Item
                     key={submission.id}
-                    style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: 16 }}
                     actions={[
                       <Button key="detail" type="link" onClick={() => openSubmissionDetail(submission.id)}>
                         查看详情
@@ -385,11 +400,11 @@ const UploadCenter = () => {
                       </Button>,
                     ]}
                   >
-                    <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                      <Space align="center" size={12} wrap>
-                        <Text strong style={{ fontSize: 16 }}>
-                          {student.name} 的 {exam?.title ?? `试卷 #${submission.exam_id}`}
-                        </Text>
+                      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                        <Space align="center" size={12} wrap>
+                          <Text strong style={{ fontSize: 16 }}>
+                            {student.name} 的 {exam?.title ?? `试卷 #${submission.exam_id}`}
+                          </Text>
                         <Tag color={submission.status === "graded" ? "green" : "orange"}>
                           {statusDisplay(submission.status)}
                         </Tag>
@@ -423,7 +438,7 @@ const UploadCenter = () => {
         </Spin>
       </PageLayout>
 
-      <Drawer title="提交详情" width={520} open={detailOpen} onClose={closeDetail} destroyOnClose>
+      <Drawer title="提交详情" width={isCompact ? "100%" : 520} open={detailOpen} onClose={closeDetail} destroyOnClose>
         {detailLoading || !detailSubmission ? (
           <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 240 }}>
             <Spin />

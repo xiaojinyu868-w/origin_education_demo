@@ -19,10 +19,13 @@ from .models import (
     Classroom,
     Exam,
     GradingSession,
+    Mistake,
+    MistakeAnalysis,
     PracticeAssignment,
     PracticeStatus,
     Question,
     SessionStatus,
+    StudentProfile,
     SubmissionStatus,
     ProcessingLog,
     Response,
@@ -51,6 +54,15 @@ from .schemas import (
     GradingSessionUpdate,
     ManualScoreUpdate,
     MistakeRead,
+    StudentProfileRead,
+    StudentProfileUpdate,
+    AnalysisContextRequest,
+    AnalysisContextPreview,
+    AnalysisRequest,
+    MistakeAnalysisRead,
+    MistakeAnalysisHistory,
+    AnalysisCleanupRequest,
+    AnalysisCleanupResult,
     OCRResult,
     ProcessingStep,
     ProcessingLogList,
@@ -82,9 +94,16 @@ from .services.llm import (
     set_llm_credentials,
     stream_teacher_assistant,
 )
-from .services.mistakes import get_student_mistakes
 from .services.ocr import OCRProcessingError, run_ocr_pipeline
 from .services.practice import generate_practice_assignment
+from .services.profile import ensure_student_profile, refresh_student_profile_stats
+from .services.student_analysis import (
+    AnalysisHistoryLimitExceeded,
+    build_analysis_context,
+    cleanup_analysis_history,
+    list_analysis_history,
+    perform_student_analysis,
+)
 from uuid import uuid4
 
 GENERATED_ROOT_DIR = Path(__file__).resolve().parent / "generated"
@@ -93,6 +112,64 @@ EXAM_DRAFT_STORAGE_DIR = GENERATED_ROOT_DIR / "exams"
 ALLOWED_FEEDBACK_MIME_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 MAX_FEEDBACK_ATTACHMENTS = 3
 MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024
+
+
+def _require_student(session: Session, student_id: int) -> Student:
+    student = session.get(Student, student_id)
+    if student is None:
+        raise HTTPException(status_code=404, detail="未找到对应学生")
+    return student
+
+
+def _build_student_profile_schema(student: Student, profile: StudentProfile) -> StudentProfileRead:
+    latest_stats = profile.latest_mistake_stats or {
+        "total_mistakes": 0,
+        "knowledge_distribution": [],
+        "last_mistake_at": None,
+        "incomplete_count": 0,
+    }
+    return StudentProfileRead(
+        student=StudentRead.model_validate(student),
+        study_goal=profile.study_goal,
+        teacher_notes=profile.teacher_notes,
+        contact_info=profile.contact_info,
+        profile_status=profile.profile_status,
+        latest_mistake_stats=latest_stats,
+        updated_at=profile.updated_at,
+        updated_by=profile.updated_by,
+    )
+
+
+def _list_student_mistakes(
+    session: Session,
+    student_id: int,
+    *,
+    knowledge_tag: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[MistakeRead]:
+    _require_student(session, student_id)
+    ensure_student_profile(session, student_id)
+
+    stmt = (
+        select(Mistake)
+        .where(Mistake.student_id == student_id)
+        .order_by(Mistake.last_seen_at.desc())
+    )
+    mistakes = session.exec(stmt).all()
+
+    if knowledge_tag:
+        needle = knowledge_tag.strip().lower()
+        if needle:
+            mistakes = [
+                item
+                for item in mistakes
+                if item.knowledge_tags and needle in item.knowledge_tags.lower()
+            ]
+
+    if status:
+        mistakes = [item for item in mistakes if item.data_status == status]
+
+    return [MistakeRead.model_validate(item) for item in mistakes]
 
 
 def _cleanup_generated_assets() -> None:
@@ -665,7 +742,7 @@ async def upload_submission(
         session.add(
             ProcessingLog(
                 submission_id=submission.id,
-                step="AI Summary",
+                step="AI 批改摘要",
                 actor_type="assistant",
                 detail=grading_artifacts.ai_summary,
             ),
@@ -743,9 +820,9 @@ def update_manual_score(
 
     log_entry = ProcessingLog(
         submission_id=response.submission_id,
-        step="Teacher Review",
+        step="教师复核",
         actor_type="teacher",
-        detail=f"Adjusted question {response.question_id} score to {payload.new_score}",
+        detail=f"已将题目 {response.question_id} 分数调整为 {payload.new_score}",
         extra={
             "response_id": response.id,
             "new_score": payload.new_score,
@@ -760,9 +837,140 @@ def update_manual_score(
 
 @app.get("/students/{student_id}/mistakes", response_model=List[MistakeRead])
 def list_student_mistakes(student_id: int, session: Session = Depends(_get_db)) -> List[MistakeRead]:
-    mistakes = get_student_mistakes(session, student_id)
-    return [MistakeRead.model_validate(item) for item in mistakes]
+    return _list_student_mistakes(session, student_id)
 
+
+@app.get("/demo/students/{student_id}/profile", response_model=StudentProfileRead)
+def get_student_profile(student_id: int, session: Session = Depends(_get_db)) -> StudentProfileRead:
+    student = _require_student(session, student_id)
+    profile = refresh_student_profile_stats(session, student_id)
+    session.refresh(profile)
+    return _build_student_profile_schema(student, profile)
+
+
+@app.patch("/demo/students/{student_id}/profile", response_model=StudentProfileRead)
+def update_student_profile(
+    student_id: int,
+    payload: StudentProfileUpdate,
+    session: Session = Depends(_get_db),
+) -> StudentProfileRead:
+    student = _require_student(session, student_id)
+    profile = ensure_student_profile(session, student_id)
+    data = payload.model_dump(exclude_unset=True)
+
+    if "study_goal" in data:
+        profile.study_goal = data["study_goal"]
+    if "teacher_notes" in data:
+        profile.teacher_notes = data["teacher_notes"]
+    if "contact_info" in data:
+        profile.contact_info = data["contact_info"]
+    if "updated_by" in data:
+        profile.updated_by = data["updated_by"]
+
+    profile.updated_at = datetime.utcnow()
+    session.add(profile)
+    session.commit()
+
+    refreshed = refresh_student_profile_stats(session, student_id)
+    session.refresh(refreshed)
+    return _build_student_profile_schema(student, refreshed)
+
+
+@app.get("/demo/students/{student_id}/mistakes", response_model=List[MistakeRead])
+def list_student_mistakes_demo(
+    student_id: int,
+    knowledge_tag: Optional[str] = None,
+    status: Optional[str] = None,
+    session: Session = Depends(_get_db),
+) -> List[MistakeRead]:
+    return _list_student_mistakes(
+        session,
+        student_id,
+        knowledge_tag=knowledge_tag,
+        status=status,
+    )
+
+
+@app.post(
+    "/demo/students/{student_id}/analysis/context",
+    response_model=AnalysisContextPreview,
+)
+def build_student_analysis_context(
+    student_id: int,
+    payload: AnalysisContextRequest,
+    session: Session = Depends(_get_db),
+) -> AnalysisContextPreview:
+    try:
+        context, _ = build_analysis_context(
+            session,
+            student_id=student_id,
+            mistake_ids=payload.mistake_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ensure_student_profile(session, student_id)
+    session.commit()
+    return AnalysisContextPreview.model_validate(context)
+
+
+@app.post("/demo/students/{student_id}/analysis", response_model=MistakeAnalysisRead)
+def create_student_analysis(
+    student_id: int,
+    payload: AnalysisRequest,
+    session: Session = Depends(_get_db),
+) -> MistakeAnalysisRead:
+    try:
+        analysis = perform_student_analysis(
+            session,
+            student_id=student_id,
+            mistake_ids=payload.mistake_ids,
+            teacher_id=payload.teacher_id,
+        )
+    except AnalysisHistoryLimitExceeded as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMInvocationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return MistakeAnalysisRead.model_validate(analysis)
+
+
+@app.get(
+    "/demo/students/{student_id}/analysis/history",
+    response_model=MistakeAnalysisHistory,
+)
+def get_student_analysis_history(
+    student_id: int,
+    limit: int = 10,
+    session: Session = Depends(_get_db),
+) -> MistakeAnalysisHistory:
+    analyses = list_analysis_history(session, student_id=student_id, limit=limit)
+    items = [MistakeAnalysisRead.model_validate(item) for item in analyses]
+    return MistakeAnalysisHistory(items=items)
+
+
+@app.post(
+    "/demo/students/{student_id}/analysis/cleanup",
+    response_model=AnalysisCleanupResult,
+)
+def cleanup_student_analysis_history(
+    student_id: int,
+    payload: AnalysisCleanupRequest,
+    session: Session = Depends(_get_db),
+) -> AnalysisCleanupResult:
+    if not payload.analysis_ids and payload.before_timestamp is None:
+        raise HTTPException(status_code=400, detail="请提供清理条件")
+
+    deleted_ids = cleanup_analysis_history(
+        session,
+        student_id=student_id,
+        analysis_ids=payload.analysis_ids,
+        before_timestamp=payload.before_timestamp,
+    )
+    return AnalysisCleanupResult(deleted_ids=deleted_ids)
 
 @app.post("/practice", response_model=PracticeAssignmentRead)
 def create_practice_assignment_endpoint(

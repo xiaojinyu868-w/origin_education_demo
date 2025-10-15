@@ -8,6 +8,7 @@ import StepAnswerReview from "./steps/StepAnswerReview";
 import StepStudentUpload from "./steps/StepStudentUpload";
 import StepReviewConfirm from "./steps/StepReviewConfirm";
 import StepCompletion from "./steps/StepCompletion";
+import useResponsive from "../hooks/useResponsive";
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 const WIZARD_STEPS = [
@@ -20,6 +21,8 @@ const WIZARD_STEPS = [
 const GradingWizard = () => {
     const navigate = useNavigate();
     const location = useLocation();
+    const { isMobile, isTablet } = useResponsive();
+    const isCompact = isMobile || isTablet;
     const { state: { initializing, step, error }, actions: { initialize, clearError, goToStep }, } = useWizardStore();
     const lastSyncedQueryStep = useRef(null);
     const requestedStep = useMemo(() => {
@@ -106,9 +109,9 @@ const GradingWizard = () => {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
-                    padding: "0 32px",
+                    padding: isCompact ? "0 16px" : "0 32px",
                     background: "#f8fafc",
                     borderBottom: "1px solid #e2e8f0",
-                }, children: [_jsxs(Space, { size: 16, align: "center", children: [_jsx("img", { src: "/logo.svg", alt: "logo", style: { width: 40, height: 40 } }), _jsxs("div", { children: [_jsx(Title, { level: 4, style: { margin: 0 }, children: "\u6279\u6539\u6D41\u7A0B\u5411\u5BFC" }), _jsx(Text, { type: "secondary", children: "\u4ECE\u8BD5\u5377\u914D\u7F6E\u5230\u5BFC\u51FA\uFF0C\u4E00\u7AD9\u5F0F\u5B8C\u6210\u6279\u6539\u95ED\u73AF" })] })] }), _jsx(Button, { type: "text", onClick: () => navigate("/dashboard"), children: "\u9000\u51FA\u5411\u5BFC" })] }), _jsx(Content, { style: { padding: "32px 48px", background: "linear-gradient(180deg,#f8fafc 0%,#ffffff 100%)" }, children: _jsxs(Space, { direction: "vertical", size: 24, style: { width: "100%" }, children: [_jsx(Breadcrumb, { items: breadcrumbItems }), _jsx(Steps, { current: step - 1, items: stepItems, responsive: true, onChange: handleStepChange }), error && (_jsx(Alert, { type: "error", message: error, closable: true, onClose: clearError, showIcon: true })), _jsx("div", { style: { minHeight: 420, background: "#fff", borderRadius: 20, padding: 32, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }, children: initializing ? (_jsx("div", { style: { display: "flex", height: 356, alignItems: "center", justifyContent: "center" }, children: _jsxs(Space, { direction: "vertical", align: "center", children: [_jsx(Spin, { size: "large" }), _jsx(Text, { type: "secondary", children: "\u6B63\u5728\u52A0\u8F7D\u6279\u6539\u5411\u5BFC\uFF0C\u8BF7\u7A0D\u5019\u2026" })] }) })) : (renderStepContent()) })] }) })] }));
+                }, children: [_jsxs(Space, { size: 16, align: "center", children: [_jsx("img", { src: "/logo.svg", alt: "logo", style: { width: 40, height: 40 } }), _jsxs("div", { children: [_jsx(Title, { level: isCompact ? 5 : 4, style: { margin: 0 }, children: "\u6279\u6539\u6D41\u7A0B\u5411\u5BFC" }), _jsx(Text, { type: "secondary", children: "\u4ECE\u8BD5\u5377\u914D\u7F6E\u5230\u5BFC\u51FA\uFF0C\u4E00\u7AD9\u5F0F\u5B8C\u6210\u6279\u6539\u95ED\u73AF" })] })] }), _jsx(Button, { type: "text", onClick: () => navigate("/dashboard"), block: isCompact, children: "\u95AB\u20AC\u9351\u54C4\u609C\u7035?" })] }), _jsx(Content, { style: { padding: isCompact ? "24px 16px" : "32px 48px", background: "linear-gradient(180deg,#f8fafc 0%,#ffffff 100%)" }, children: _jsxs(Space, { direction: "vertical", size: isCompact ? 20 : 24, style: { width: "100%" }, children: [_jsx(Breadcrumb, { items: breadcrumbItems }), _jsx(Steps, { current: step - 1, items: stepItems, responsive: true, onChange: handleStepChange, direction: isCompact ? "vertical" : "horizontal", size: isCompact ? "small" : "default" }), error && (_jsx(Alert, { type: "error", message: error, closable: true, onClose: clearError, showIcon: true })), _jsx("div", { style: { minHeight: 420, background: "#fff", borderRadius: 20, padding: isCompact ? 20 : 32, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }, children: initializing ? (_jsx("div", { style: { display: "flex", height: 356, alignItems: "center", justifyContent: "center" }, children: _jsxs(Space, { direction: "vertical", align: "center", children: [_jsx(Spin, { size: "large" }), _jsx(Text, { type: "secondary", children: "\u6B63\u5728\u52A0\u8F7D\u6279\u6539\u5411\u5BFC\uFF0C\u8BF7\u7A0D\u5019\u2026" })] }) })) : (renderStepContent()) })] }) })] }));
 };
 export default GradingWizard;

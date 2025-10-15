@@ -33,6 +33,24 @@ class StudentRead(StudentBase):
         from_attributes = True
 
 
+class StudentProfileRead(BaseModel):
+    student: StudentRead
+    study_goal: Optional[str] = None
+    teacher_notes: Optional[str] = None
+    contact_info: Optional[Dict[str, Any]] = None
+    profile_status: str
+    latest_mistake_stats: Optional[Dict[str, Any]] = None
+    updated_at: datetime
+    updated_by: Optional[int] = None
+
+
+class StudentProfileUpdate(BaseModel):
+    study_goal: Optional[str] = None
+    teacher_notes: Optional[str] = None
+    contact_info: Optional[Dict[str, Any]] = None
+    updated_by: Optional[int] = None
+
+
 class TeacherBase(BaseModel):
     name: str
     email: Optional[str] = None
@@ -219,15 +237,63 @@ class GradingSessionRead(BaseModel):
 class MistakeRead(BaseModel):
     id: int
     question_id: int
+    student_id: int
     knowledge_tags: Optional[str]
     misconception_label: Optional[str]
     resolution_notes: Optional[str]
     created_at: datetime
     last_seen_at: datetime
     times_practiced: int
+    error_count: int
+    data_status: str
+    root_cause: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class AnalysisContextRequest(BaseModel):
+    mistake_ids: List[int] = Field(..., min_length=1, description="待分析的错题 ID 列表")
+
+
+class AnalysisContextPreview(BaseModel):
+    student_profile: Dict[str, Any]
+    mistakes: List[Dict[str, Any]]
+    stats: Dict[str, Any]
+    missing_mistake_ids: List[int] = Field(default_factory=list)
+    skipped_mistake_ids: List[int] = Field(default_factory=list)
+
+
+class AnalysisRequest(AnalysisContextRequest):
+    teacher_id: Optional[int] = None
+
+
+class MistakeAnalysisRead(BaseModel):
+    id: int
+    student_id: int
+    created_at: datetime
+    created_by: Optional[int] = None
+    status: str
+    error_message: Optional[str] = None
+    context_meta: Optional[Dict[str, Any]] = None
+    context_snapshot: Optional[Dict[str, Any]] = None
+    llm_summary: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MistakeAnalysisHistory(BaseModel):
+    items: List[MistakeAnalysisRead]
+
+
+class AnalysisCleanupRequest(BaseModel):
+    analysis_ids: Optional[List[int]] = None
+    before_timestamp: Optional[datetime] = None
+
+
+class AnalysisCleanupResult(BaseModel):
+    deleted_ids: List[int] = Field(default_factory=list)
 
 
 class PracticeAssignmentCreate(BaseModel):

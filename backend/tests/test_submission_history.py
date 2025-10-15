@@ -137,4 +137,4 @@ def test_upload_submission_populates_history(
     logs = log_resp.json()["items"]
     assert len(logs) == 3
     assert logs[0]["step"] == "OCR 解析"
-    assert logs[-1]["step"] == "AI Summary"
+    assert logs[-1]["step"] == "AI 批改摘要"

@@ -403,6 +403,45 @@ def summarize_submission(responses: List[Dict[str, Any]]) -> str:
     return (response.choices[0].message.content or "").strip()
 
 
+def analyze_student_profile(context: Dict[str, Any]) -> Dict[str, Any]:
+    """调用通义千问对学生档案与错题上下文进行分析。"""
+
+    client = _get_client()
+    model_name = _read_env("QWEN_TEXT_MODEL", "qwen-max")
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一名资深教研员，需要基于学生档案与错题列表给出诊断。"
+                "请严格输出 JSON，对象需包含 overall_summary（字符串）、knowledge_focus（数组）、"
+                "teaching_advice（数组）以及 root_causes（数组）。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(context, ensure_ascii=False),
+        },
+    ]
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        temperature=0.4,
+    )
+
+    if not response.choices:
+        raise LLMInvocationError("大模型未返回任何内容。")
+
+    payload = _parse_json_payload(response.choices[0].message.content or "")
+    return {
+        "overall_summary": str(payload.get("overall_summary") or "").strip(),
+        "knowledge_focus": payload.get("knowledge_focus") or [],
+        "teaching_advice": payload.get("teaching_advice") or [],
+        "root_causes": payload.get("root_causes") or [],
+    }
+
+
 
 TEACHER_ASSISTANT_PROMPT = (
     "你是一名资深教研顾问，擅长将大模型能力转化为教学计划、讲评策略和家校沟通脚本。"
