@@ -3,7 +3,6 @@ import { message } from "antd";
 
 export const apiClient = axios.create({
   baseURL: "/api",
-  timeout: 20000,
 });
 
 apiClient.interceptors.response.use(

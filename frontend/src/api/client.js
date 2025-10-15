@@ -2,7 +2,6 @@ import axios from "axios";
 import { message } from "antd";
 export const apiClient = axios.create({
     baseURL: "/api",
-    timeout: 20000,
 });
 apiClient.interceptors.response.use((response) => response, (error) => {
     const msg = error?.response?.data?.detail ||
