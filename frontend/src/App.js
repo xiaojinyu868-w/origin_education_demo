@@ -14,6 +14,7 @@ import useResponsive from "./hooks/useResponsive";
 import { AuthProvider } from "./context/AuthContext";
 import useAuth from "./hooks/useAuth";
 import AuthPage from "./pages/AuthPage";
+import { safeStorage } from "./utils/storage";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const RosterSetup = lazy(() => import("./pages/RosterSetup"));
 const UploadCenter = lazy(() => import("./pages/UploadCenter"));
@@ -164,7 +165,7 @@ const AppLayout = () => {
     }, [location.pathname]);
     const applyStoredFeedbackProfile = useCallback(() => {
         try {
-            const stored = localStorage.getItem("teacherFeedbackProfile");
+            const stored = safeStorage.get("teacherFeedbackProfile");
             const baseValues = {
                 content: "",
                 is_anonymous: false,
@@ -266,7 +267,7 @@ const AppLayout = () => {
         try {
             const response = await submitTeacherFeedback(formData);
             if (!isAnonymous) {
-                localStorage.setItem("teacherFeedbackProfile", JSON.stringify({ teacher_name: trimmedName ?? "", teacher_email: trimmedEmail ?? "" }));
+                safeStorage.set("teacherFeedbackProfile", JSON.stringify({ teacher_name: trimmedName ?? "", teacher_email: trimmedEmail ?? "" }));
             }
             message.success(`感谢反馈，我们已收到编号 #${response.id}`);
             setFeedbackVisible(false);

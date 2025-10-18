@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, }
 import { useNavigate } from "react-router-dom";
 import { fetchCurrentUser, loginUser, registerUser } from "../api/services";
 import { AUTH_LOGOUT_EVENT, AUTH_TOKEN_KEY } from "../constants/auth";
+import { safeStorage } from "../utils/storage";
 const AuthContext = createContext(undefined);
 const useAuthContext = () => {
     const context = useContext(AuthContext);
@@ -14,11 +15,11 @@ const useAuthContext = () => {
 };
 const AuthProvider = ({ children }) => {
     const navigate = useNavigate();
-    const [token, setToken] = useState(() => localStorage.getItem(AUTH_TOKEN_KEY));
+    const [token, setToken] = useState(() => safeStorage.get(AUTH_TOKEN_KEY));
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const clearAuth = useCallback((messageText) => {
-        localStorage.removeItem(AUTH_TOKEN_KEY);
+        safeStorage.remove(AUTH_TOKEN_KEY);
         setToken(null);
         setUser(null);
         if (messageText) {
@@ -27,7 +28,7 @@ const AuthProvider = ({ children }) => {
         navigate("/", { replace: true });
     }, [navigate]);
     const refreshUser = useCallback(async () => {
-        if (!localStorage.getItem(AUTH_TOKEN_KEY)) {
+        if (!safeStorage.get(AUTH_TOKEN_KEY)) {
             setUser(null);
             return null;
         }
@@ -61,7 +62,7 @@ const AuthProvider = ({ children }) => {
     }, [clearAuth]);
     const login = useCallback(async (email, password) => {
         const tokenResponse = await loginUser({ email, password });
-        localStorage.setItem(AUTH_TOKEN_KEY, tokenResponse.access_token);
+        safeStorage.set(AUTH_TOKEN_KEY, tokenResponse.access_token);
         setToken(tokenResponse.access_token);
         const profile = await fetchCurrentUser();
         setUser(profile);

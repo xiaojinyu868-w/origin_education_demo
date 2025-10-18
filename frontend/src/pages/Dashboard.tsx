@@ -26,6 +26,7 @@ import {
 import QuickActionCard from "../components/QuickActionCard";
 import PageLayout from "../components/PageLayout";
 import { emitNavigation } from "../utils/navigation";
+import { formatKnowledgeTag } from "../utils/knowledge";
 import useResponsive from "../hooks/useResponsive";
 
 const { Title, Paragraph, Text } = Typography;
@@ -325,7 +326,7 @@ const Dashboard = () => {
                 {analytics?.knowledge_breakdown.map((item) => (
                   <Card key={item.knowledge_tag} bordered={false} size="small">
                     <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                      <Text strong>{item.knowledge_tag}</Text>
+                      <Text strong>{formatKnowledgeTag(item.knowledge_tag)}</Text>
                       <Text type="secondary">正确率：{Math.round(item.accuracy * 100)}%</Text>
                       <Text type="secondary">平均得分：{item.average_score}</Text>
                     </Space>

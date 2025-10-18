@@ -1,11 +1,12 @@
 import axios from "axios";
 import { message } from "antd";
 import { AUTH_LOGOUT_EVENT, AUTH_TOKEN_KEY } from "../constants/auth";
+import { safeStorage } from "../utils/storage";
 export const apiClient = axios.create({
     baseURL: "/api",
 });
 apiClient.interceptors.request.use((config) => {
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    const token = safeStorage.get(AUTH_TOKEN_KEY);
     if (token) {
         config.headers = config.headers ?? {};
         if (!config.headers.Authorization) {

@@ -5,6 +5,7 @@ import * as echarts from "echarts";
 import { fetchAnalytics, fetchExams } from "../api/services";
 import PageLayout from "../components/PageLayout";
 import useResponsive from "../hooks/useResponsive";
+import { formatKnowledgeTag } from "../utils/knowledge";
 const { Paragraph, Title } = Typography;
 const AnalyticsCenter = () => {
     const { isMobile, isTablet } = useResponsive();
@@ -52,7 +53,7 @@ const AnalyticsCenter = () => {
         }
         if (!chartInstance.current)
             return;
-        const tags = summary.knowledge_breakdown.map((item) => item.knowledge_tag || "未标注");
+        const tags = summary.knowledge_breakdown.map((item) => formatKnowledgeTag(item.knowledge_tag));
         const accuracy = summary.knowledge_breakdown.map((item) => Math.round(item.accuracy * 100));
         chartInstance.current.setOption({
             tooltip: {},
@@ -89,7 +90,10 @@ const AnalyticsCenter = () => {
     useEffect(() => {
         chartInstance.current?.resize();
     }, [isCompact]);
-    const tableData = useMemo(() => summary?.knowledge_breakdown ?? [], [summary]);
+    const tableData = useMemo(() => summary?.knowledge_breakdown.map((item) => ({
+        ...item,
+        displayTag: formatKnowledgeTag(item.knowledge_tag),
+    })) ?? [], [summary]);
     return (_jsxs(Space, { direction: "vertical", size: 28, style: { width: "100%" }, children: [_jsx(PageLayout, { title: "\u73ED\u7EA7\u5B66\u60C5\u96F7\u8FBE", description: "\u9009\u62E9\u8003\u8BD5\u4E0E\u65F6\u95F4\u8303\u56F4\u5373\u53EF\u751F\u6210\u77E5\u8BC6\u70B9\u70ED\u529B\u56FE\u4E0E\u5173\u952E\u6307\u6807\uFF0C\u8F85\u52A9\u7CBE\u51C6\u6559\u5B66\u3002", extra: _jsxs("div", { className: "filters-stack", children: [_jsx(Select, { allowClear: true, placeholder: "\u6309\u8003\u8BD5\u7B5B\u9009", value: selectedExam, onChange: (value) => {
                                 setSelectedExam(value);
                                 void loadAnalytics(value);
@@ -101,8 +105,8 @@ const AnalyticsCenter = () => {
                                     { title: "已批改试卷", value: summary.total_submissions, suffix: "份" },
                                     { title: "平均分", value: summary.average_score, suffix: "分", precision: 1 },
                                     { title: "中位数", value: summary.median_score, suffix: "分", precision: 1 },
-                                ].map((item) => (_jsx(Card, { className: "shadow-panel", bordered: false, children: _jsx(Statistic, { title: item.title, value: item.value, suffix: item.suffix, precision: item.precision }) }, item.title))) }), _jsx("div", { className: "chart-container", ref: chartRef })] })) : (_jsx(Empty, { image: Empty.PRESENTED_IMAGE_SIMPLE, description: "\u8BF7\u9009\u62E9\u8003\u8BD5\u6216\u4E0A\u4F20\u8BD5\u5377\u540E\u67E5\u770B\u5B66\u60C5\u6570\u636E\u3002" })) }) }), _jsx(PageLayout, { title: "\u77E5\u8BC6\u70B9\u8BE6\u7EC6\u5217\u8868", description: "\u638C\u63E1\u51FA\u9898\u6B21\u6570\u3001\u9519\u8BEF\u6B21\u6570\u4E0E\u5E73\u5747\u5F97\u5206\uFF0C\u66F4\u5408\u7406\u5730\u5B89\u6392\u8BFE\u5802\u65F6\u95F4\u3002", children: isCompact ? (tableData.length ? (_jsx(Space, { direction: "vertical", size: 12, style: { width: "100%" }, children: tableData.map((item, index) => (_jsx(Card, { className: "list-card", size: "small", bordered: false, children: _jsxs(Space, { direction: "vertical", size: 6, style: { width: "100%" }, children: [_jsx(Typography.Text, { strong: true, children: item.knowledge_tag || "未标注" }), _jsxs(Typography.Text, { type: "secondary", children: ["\u51FA\u9898\u6570\uFF1A", item.total_attempts, " \u00B7 \u9519\u8BEF\u6B21\u6570\uFF1A", item.incorrect_count] }), _jsxs(Typography.Text, { type: "secondary", children: ["\u6B63\u786E\u7387\uFF1A", Math.round(item.accuracy * 100), "% \u00B7 \u5E73\u5747\u5F97\u5206\uFF1A", item.average_score] })] }) }, item.knowledge_tag || `knowledge-${index}`))) })) : (_jsx(Empty, { description: "\u6682\u65F6\u6CA1\u6709\u53EF\u5206\u6790\u7684\u6570\u636E", image: Empty.PRESENTED_IMAGE_SIMPLE }))) : (_jsx(Table, { rowKey: "knowledge_tag", dataSource: tableData, pagination: false, locale: { emptyText: "暂时没有可分析的数据" }, columns: [
-                        { title: "知识点", dataIndex: "knowledge_tag" },
+                                ].map((item) => (_jsx(Card, { className: "shadow-panel", bordered: false, children: _jsx(Statistic, { title: item.title, value: item.value, suffix: item.suffix, precision: item.precision }) }, item.title))) }), _jsx("div", { className: "chart-container", ref: chartRef })] })) : (_jsx(Empty, { image: Empty.PRESENTED_IMAGE_SIMPLE, description: "\u8BF7\u9009\u62E9\u8003\u8BD5\u6216\u4E0A\u4F20\u8BD5\u5377\u540E\u67E5\u770B\u5B66\u60C5\u6570\u636E\u3002" })) }) }), _jsx(PageLayout, { title: "\u77E5\u8BC6\u70B9\u8BE6\u7EC6\u5217\u8868", description: "\u638C\u63E1\u51FA\u9898\u6B21\u6570\u3001\u9519\u8BEF\u6B21\u6570\u4E0E\u5E73\u5747\u5F97\u5206\uFF0C\u66F4\u5408\u7406\u5730\u5B89\u6392\u8BFE\u5802\u65F6\u95F4\u3002", children: isCompact ? (tableData.length ? (_jsx(Space, { direction: "vertical", size: 12, style: { width: "100%" }, children: tableData.map((item, index) => (_jsx(Card, { className: "list-card", size: "small", bordered: false, children: _jsxs(Space, { direction: "vertical", size: 6, style: { width: "100%" }, children: [_jsx(Typography.Text, { strong: true, children: item.displayTag }), _jsxs(Typography.Text, { type: "secondary", children: ["\u51FA\u9898\u6570\uFF1A", item.total_attempts, " \u00B7 \u9519\u8BEF\u6B21\u6570\uFF1A", item.incorrect_count] }), _jsxs(Typography.Text, { type: "secondary", children: ["\u6B63\u786E\u7387\uFF1A", Math.round(item.accuracy * 100), "% \u00B7 \u5E73\u5747\u5F97\u5206\uFF1A", item.average_score] })] }) }, item.knowledge_tag || `knowledge-${index}`))) })) : (_jsx(Empty, { description: "\u6682\u65F6\u6CA1\u6709\u53EF\u5206\u6790\u7684\u6570\u636E", image: Empty.PRESENTED_IMAGE_SIMPLE }))) : (_jsx(Table, { rowKey: (record, index) => record.knowledge_tag ?? `knowledge-${index}`, dataSource: tableData, pagination: false, locale: { emptyText: "暂时没有可分析的数据" }, columns: [
+                        { title: "知识点", dataIndex: "displayTag" },
                         { title: "出题数", dataIndex: "total_attempts" },
                         { title: "错误次数", dataIndex: "incorrect_count" },
                         {

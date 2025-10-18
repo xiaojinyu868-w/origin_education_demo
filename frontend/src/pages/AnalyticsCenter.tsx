@@ -6,6 +6,7 @@ import type { AnalyticsSummary, Exam } from "../types";
 import { fetchAnalytics, fetchExams } from "../api/services";
 import PageLayout from "../components/PageLayout";
 import useResponsive from "../hooks/useResponsive";
+import { formatKnowledgeTag } from "../utils/knowledge";
 
 const { Paragraph, Title } = Typography;
 
@@ -55,7 +56,7 @@ const AnalyticsCenter = () => {
     }
     if (!chartInstance.current) return;
 
-    const tags = summary.knowledge_breakdown.map((item) => item.knowledge_tag || "未标注");
+    const tags = summary.knowledge_breakdown.map((item) => formatKnowledgeTag(item.knowledge_tag));
     const accuracy = summary.knowledge_breakdown.map((item) => Math.round(item.accuracy * 100));
 
     chartInstance.current.setOption({
@@ -96,7 +97,14 @@ const AnalyticsCenter = () => {
     chartInstance.current?.resize();
   }, [isCompact]);
 
-  const tableData = useMemo(() => summary?.knowledge_breakdown ?? [], [summary]);
+  const tableData = useMemo(
+    () =>
+      summary?.knowledge_breakdown.map((item) => ({
+        ...item,
+        displayTag: formatKnowledgeTag(item.knowledge_tag),
+      })) ?? [],
+    [summary],
+  );
 
   return (
     <Space direction="vertical" size={28} style={{ width: "100%" }}>
@@ -171,7 +179,7 @@ const AnalyticsCenter = () => {
                   bordered={false}
                 >
                   <Space direction="vertical" size={6} style={{ width: "100%" }}>
-                    <Typography.Text strong>{item.knowledge_tag || "未标注"}</Typography.Text>
+                    <Typography.Text strong>{item.displayTag}</Typography.Text>
                     <Typography.Text type="secondary">
                       出题数：{item.total_attempts} · 错误次数：{item.incorrect_count}
                     </Typography.Text>
@@ -187,12 +195,12 @@ const AnalyticsCenter = () => {
           )
         ) : (
           <Table
-            rowKey="knowledge_tag"
+            rowKey={(record, index) => record.knowledge_tag ?? `knowledge-${index}`}
             dataSource={tableData}
             pagination={false}
             locale={{ emptyText: "暂时没有可分析的数据" }}
             columns={[
-              { title: "知识点", dataIndex: "knowledge_tag" },
+              { title: "知识点", dataIndex: "displayTag" },
               { title: "出题数", dataIndex: "total_attempts" },
               { title: "错误次数", dataIndex: "incorrect_count" },
               {
