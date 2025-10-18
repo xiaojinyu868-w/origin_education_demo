@@ -18,6 +18,8 @@ import type {
   SubmissionResponse,
   Teacher,
   TeacherFeedback,
+  TokenResponse,
+  User,
 } from "../types";
 import { apiClient } from "./client";
 
@@ -41,6 +43,35 @@ export const refreshDemoData = async () => {
 
 export const clearAllData = async () => {
   const { data } = await apiClient.post<{ message: string }>("/bootstrap/clear");
+  return data;
+};
+
+export const registerUser = async (payload: {
+  email: string;
+  password: string;
+  name: string;
+  create_demo_data?: boolean;
+}) => {
+  const { data } = await apiClient.post<User>("/auth/register", payload);
+  return data;
+};
+
+export const loginUser = async (payload: { email: string; password: string }) => {
+  const params = new URLSearchParams();
+  params.append("username", payload.email);
+  params.append("password", payload.password);
+  params.append("grant_type", "password");
+  params.append("scope", "");
+  params.append("client_id", "");
+  params.append("client_secret", "");
+  const { data } = await apiClient.post<TokenResponse>("/auth/token", params, {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+  return data;
+};
+
+export const fetchCurrentUser = async () => {
+  const { data } = await apiClient.get<User>("/auth/me");
   return data;
 };
 

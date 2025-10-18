@@ -6,14 +6,15 @@ from pathlib import Path
 from datetime import datetime
 from typing import Iterator, List, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from .database import engine, get_session, init_db, reset_database
-from .sample_data import ensure_demo_dataset
+from .sample_data import ensure_demo_dataset, create_demo_dataset_for_user
 from .models import (
     ClassEnrollment,
     Classroom,
@@ -33,6 +34,7 @@ from .models import (
     Submission,
     Teacher,
     TeacherFeedback,
+    User,
 )
 from .schemas import (
     AnalyticsFilter,
@@ -82,6 +84,9 @@ from .schemas import (
     TeacherFeedbackCreate,
     TeacherFeedbackRead,
     TeacherRead,
+    TokenResponse,
+    UserRead,
+    UserRegisterRequest,
 )
 from .services.analytics import build_analytics
 from .services.grading import auto_grade_submission
@@ -104,6 +109,12 @@ from .services.student_analysis import (
     list_analysis_history,
     perform_student_analysis,
 )
+from .security import (
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+    get_password_hash,
+)
 from uuid import uuid4
 
 GENERATED_ROOT_DIR = Path(__file__).resolve().parent / "generated"
@@ -114,11 +125,59 @@ MAX_FEEDBACK_ATTACHMENTS = 3
 MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024
 
 
-def _require_student(session: Session, student_id: int) -> Student:
+def _require_student(session: Session, student_id: int, current_user: User) -> Student:
     student = session.get(Student, student_id)
-    if student is None:
+    if student is None or student.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="未找到对应学生")
     return student
+
+
+def _require_classroom(session: Session, classroom_id: int, current_user: User) -> Classroom:
+    classroom = session.get(Classroom, classroom_id)
+    if classroom is None or classroom.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="未找到对应班级")
+    return classroom
+
+
+def _require_teacher(session: Session, teacher_id: int, current_user: User) -> Teacher:
+    teacher = session.get(Teacher, teacher_id)
+    if teacher is None or teacher.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="未找到教师信息")
+    return teacher
+
+
+def _require_exam(session: Session, exam_id: int, current_user: User) -> Exam:
+    exam = session.get(Exam, exam_id)
+    if exam is None or exam.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="未找到对应考试")
+    return exam
+
+
+def _require_grading_session(
+    session: Session,
+    session_id: int,
+    current_user: User,
+) -> GradingSession:
+    grading_session = session.get(GradingSession, session_id)
+    if grading_session is None or grading_session.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="未找到批改向导会话")
+    return grading_session
+
+
+def _require_submission(session: Session, submission_id: int, current_user: User) -> Submission:
+    submission = session.get(Submission, submission_id)
+    if submission is None or submission.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="未找到该份提交记录")
+    return submission
+
+
+def _require_practice_assignment(
+    session: Session, assignment_id: int, current_user: User
+) -> PracticeAssignment:
+    assignment = session.get(PracticeAssignment, assignment_id)
+    if assignment is None or assignment.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="未找到练习任务")
+    return assignment
 
 
 def _build_student_profile_schema(student: Student, profile: StudentProfile) -> StudentProfileRead:
@@ -143,11 +202,12 @@ def _build_student_profile_schema(student: Student, profile: StudentProfile) -> 
 def _list_student_mistakes(
     session: Session,
     student_id: int,
+    current_user: User,
     *,
     knowledge_tag: Optional[str] = None,
     status: Optional[str] = None,
 ) -> List[MistakeRead]:
-    _require_student(session, student_id)
+    _require_student(session, student_id, current_user)
     ensure_student_profile(session, student_id)
 
     stmt = (
@@ -233,9 +293,58 @@ def _get_db() -> Session:
         yield session
 
 
+@app.post("/auth/register", response_model=UserRead, status_code=201)
+def register_user(payload: UserRegisterRequest, session: Session = Depends(_get_db)) -> UserRead:
+    email = payload.email.lower()
+    existing = session.exec(select(User).where(User.email == email)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    name = payload.name.strip() or payload.name
+    user = User(
+        email=email,
+        name=name,
+        hashed_password=get_password_hash(payload.password),
+        is_demo=payload.create_demo_data,
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    if payload.create_demo_data:
+        create_demo_dataset_for_user(session, user)
+        session.refresh(user)
+
+    return UserRead.model_validate(user)
+
+
+@app.post("/auth/token", response_model=TokenResponse)
+def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(_get_db),
+) -> TokenResponse:
+    user = authenticate_user(session, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token({"sub": str(user.id)})
+    return TokenResponse(access_token=access_token)
+
+
+@app.get("/auth/me", response_model=UserRead)
+def read_current_user(current_user: User = Depends(get_current_user)) -> UserRead:
+    return UserRead.model_validate(current_user)
+
+
 @app.post("/students", response_model=StudentRead)
-def create_student(payload: StudentCreate, session: Session = Depends(_get_db)) -> Student:
-    student = Student(**payload.model_dump())
+def create_student(
+    payload: StudentCreate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> Student:
+    student = Student(**payload.model_dump(), owner_id=current_user.id)
     session.add(student)
     session.commit()
     session.refresh(student)
@@ -243,14 +352,22 @@ def create_student(payload: StudentCreate, session: Session = Depends(_get_db)) 
 
 
 @app.get("/students", response_model=List[StudentRead])
-def list_students(session: Session = Depends(_get_db)) -> List[Student]:
-    stmt = select(Student)
-    return session.exec(stmt).all()
+def list_students(
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[StudentRead]:
+    stmt = select(Student).where(Student.owner_id == current_user.id)
+    students = session.exec(stmt).all()
+    return [StudentRead.model_validate(item) for item in students]
 
 
 @app.post("/teachers", response_model=TeacherRead)
-def create_teacher(payload: TeacherCreate, session: Session = Depends(_get_db)) -> Teacher:
-    teacher = Teacher(**payload.model_dump())
+def create_teacher(
+    payload: TeacherCreate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> Teacher:
+    teacher = Teacher(**payload.model_dump(), owner_id=current_user.id)
     session.add(teacher)
     session.commit()
     session.refresh(teacher)
@@ -258,14 +375,23 @@ def create_teacher(payload: TeacherCreate, session: Session = Depends(_get_db)) 
 
 
 @app.get("/teachers", response_model=List[TeacherRead])
-def list_teachers(session: Session = Depends(_get_db)) -> List[Teacher]:
-    stmt = select(Teacher)
-    return session.exec(stmt).all()
+def list_teachers(
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[TeacherRead]:
+    stmt = select(Teacher).where(Teacher.owner_id == current_user.id)
+    teachers = session.exec(stmt).all()
+    return [TeacherRead.model_validate(item) for item in teachers]
 
 
 @app.post("/classrooms", response_model=ClassroomRead)
-def create_classroom(payload: ClassroomCreate, session: Session = Depends(_get_db)) -> Classroom:
-    classroom = Classroom(**payload.model_dump())
+def create_classroom(
+    payload: ClassroomCreate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> Classroom:
+    _require_teacher(session, payload.teacher_id, current_user)
+    classroom = Classroom(**payload.model_dump(), owner_id=current_user.id)
     session.add(classroom)
     session.commit()
     session.refresh(classroom)
@@ -273,13 +399,23 @@ def create_classroom(payload: ClassroomCreate, session: Session = Depends(_get_d
 
 
 @app.get("/classrooms", response_model=List[ClassroomRead])
-def list_classrooms(session: Session = Depends(_get_db)) -> List[Classroom]:
-    stmt = select(Classroom)
-    return session.exec(stmt).all()
+def list_classrooms(
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[ClassroomRead]:
+    stmt = select(Classroom).where(Classroom.owner_id == current_user.id)
+    classrooms = session.exec(stmt).all()
+    return [ClassroomRead.model_validate(item) for item in classrooms]
 
 
 @app.post("/enrollments", response_model=EnrollmentRead)
-def enroll_student(payload: EnrollmentCreate, session: Session = Depends(_get_db)) -> ClassEnrollment:
+def enroll_student(
+    payload: EnrollmentCreate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> ClassEnrollment:
+    _require_classroom(session, payload.classroom_id, current_user)
+    _require_student(session, payload.student_id, current_user)
     enrollment = ClassEnrollment(**payload.model_dump())
     session.add(enrollment)
     session.commit()
@@ -292,18 +428,17 @@ async def create_exam_draft(
     teacher_id: int = Form(...),
     image: UploadFile = File(...),
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ExamDraftResponse:
-    teacher = session.get(Teacher, teacher_id)
-    if not teacher:
-        raise HTTPException(status_code=404, detail="???????")
+    _require_teacher(session, teacher_id, current_user)
 
     image_bytes = await image.read()
     if not image_bytes:
-        raise HTTPException(status_code=400, detail="?????????")
+        raise HTTPException(status_code=400, detail="上传的图片为空")
 
     content_type = (image.content_type or "").lower()
     if content_type and not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="???????????????")
+        raise HTTPException(status_code=400, detail="仅支持上传图片文件")
 
     try:
         outline = parse_exam_outline(image_bytes)
@@ -326,7 +461,7 @@ async def create_exam_draft(
     try:
         file_path.write_bytes(image_bytes)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail="????????") from exc
+        raise HTTPException(status_code=500, detail="保存图片失败") from exc
 
     app_root = Path(__file__).resolve().parent
     try:
@@ -338,8 +473,16 @@ async def create_exam_draft(
 
 
 @app.post("/exams", response_model=ExamRead)
-def create_exam(payload: ExamCreate, session: Session = Depends(_get_db)) -> Exam:
-    exam = Exam(**payload.model_dump(exclude={"questions"}))
+def create_exam(
+    payload: ExamCreate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExamRead:
+    if payload.teacher_id is not None:
+        _require_teacher(session, payload.teacher_id, current_user)
+    if payload.classroom_id is not None:
+        _require_classroom(session, payload.classroom_id, current_user)
+    exam = Exam(**payload.model_dump(exclude={"questions"}), owner_id=current_user.id)
     session.add(exam)
     session.flush()
 
@@ -348,14 +491,16 @@ def create_exam(payload: ExamCreate, session: Session = Depends(_get_db)) -> Exa
         session.add(question)
 
     session.commit()
-    session.refresh(exam)
     session.refresh(exam, attribute_names=["questions"])
-    return exam
+    return ExamRead.model_validate(exam)
 
 
 @app.get("/exams", response_model=List[ExamRead])
-def list_exams(session: Session = Depends(_get_db)) -> List[ExamRead]:
-    stmt = select(Exam)
+def list_exams(
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[ExamRead]:
+    stmt = select(Exam).where(Exam.owner_id == current_user.id)
     exams = session.exec(stmt).all()
     for exam in exams:
         session.refresh(exam, attribute_names=["questions"])
@@ -363,13 +508,14 @@ def list_exams(session: Session = Depends(_get_db)) -> List[ExamRead]:
 
 
 @app.get("/exams/{exam_id}", response_model=ExamRead)
-def get_exam(exam_id: int, session: Session = Depends(_get_db)) -> Exam:
-    exam = session.get(Exam, exam_id)
-    if not exam:
-        raise HTTPException(status_code=404, detail="未找到对应考试")
+def get_exam(
+    exam_id: int,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExamRead:
+    exam = _require_exam(session, exam_id, current_user)
     session.refresh(exam, attribute_names=["questions"])
-    return exam
-
+    return ExamRead.model_validate(exam)
 
 
 @app.patch("/exams/{exam_id}/answer-key", response_model=ExamRead)
@@ -377,14 +523,13 @@ def update_exam_answer_key(
     exam_id: int,
     payload: ExamAnswerKeyUpdate,
     session: Session = Depends(_get_db),
-) -> Exam:
-    exam = session.get(Exam, exam_id)
-    if not exam:
-        raise HTTPException(status_code=404, detail="未找到对应考试")
+    current_user: User = Depends(get_current_user),
+) -> ExamRead:
+    exam = _require_exam(session, exam_id, current_user)
 
     if not payload.questions:
         session.refresh(exam, attribute_names=["questions"])
-        return exam
+        return ExamRead.model_validate(exam)
 
     question_ids = [item.question_id for item in payload.questions]
     stmt = select(Question).where(Question.id.in_(question_ids))
@@ -413,48 +558,53 @@ def update_exam_answer_key(
         session.add(exam)
     session.commit()
     session.refresh(exam, attribute_names=["questions"])
-    return exam
+    return ExamRead.model_validate(exam)
 
 
 @app.get("/grading/sessions/active", response_model=GradingSessionRead)
 def get_or_create_active_grading_session(
     teacher_id: int,
     session: Session = Depends(_get_db),
-) -> GradingSession:
-    teacher = session.get(Teacher, teacher_id)
-    if not teacher:
-        raise HTTPException(status_code=404, detail="未找到教师信息")
+    current_user: User = Depends(get_current_user),
+) -> GradingSessionRead:
+    _require_teacher(session, teacher_id, current_user)
 
     stmt = (
         select(GradingSession)
         .where(
             GradingSession.teacher_id == teacher_id,
             GradingSession.status == SessionStatus.active,
+            GradingSession.owner_id == current_user.id,
         )
         .order_by(GradingSession.updated_at.desc())
     )
     existing = session.exec(stmt).first()
     if existing:
         session.refresh(existing)
-        return existing
+        return GradingSessionRead.model_validate(existing)
 
-    new_session = GradingSession(teacher_id=teacher_id)
+    new_session = GradingSession(teacher_id=teacher_id, owner_id=current_user.id)
     session.add(new_session)
     session.commit()
     session.refresh(new_session)
-    return new_session
+    return GradingSessionRead.model_validate(new_session)
 
 
 @app.post("/grading/sessions", response_model=GradingSessionRead)
 def create_grading_session_endpoint(
     payload: GradingSessionCreate,
     session: Session = Depends(_get_db),
-) -> GradingSession:
+    current_user: User = Depends(get_current_user),
+) -> GradingSessionRead:
+    _require_teacher(session, payload.teacher_id, current_user)
+    if payload.exam_id is not None:
+        _require_exam(session, payload.exam_id, current_user)
     stmt = (
         select(GradingSession)
         .where(
             GradingSession.teacher_id == payload.teacher_id,
             GradingSession.status == SessionStatus.active,
+            GradingSession.owner_id == current_user.id,
         )
         .order_by(GradingSession.updated_at.desc())
     )
@@ -469,17 +619,18 @@ def create_grading_session_endpoint(
         session.add(existing)
         session.commit()
         session.refresh(existing)
-        return existing
+        return GradingSessionRead.model_validate(existing)
 
     grading_session = GradingSession(
         teacher_id=payload.teacher_id,
         exam_id=payload.exam_id,
         payload=payload.payload,
+        owner_id=current_user.id,
     )
     session.add(grading_session)
     session.commit()
     session.refresh(grading_session)
-    return grading_session
+    return GradingSessionRead.model_validate(grading_session)
 
 
 @app.patch("/grading/sessions/{session_id}", response_model=GradingSessionRead)
@@ -487,10 +638,9 @@ def update_grading_session_endpoint(
     session_id: int,
     payload: GradingSessionUpdate,
     session: Session = Depends(_get_db),
-) -> GradingSession:
-    grading_session = session.get(GradingSession, session_id)
-    if not grading_session:
-        raise HTTPException(status_code=404, detail="未找到批改向导会话")
+    current_user: User = Depends(get_current_user),
+) -> GradingSessionRead:
+    grading_session = _require_grading_session(session, session_id, current_user)
 
     updates = payload.model_dump(exclude_unset=True)
     if "current_step" in updates:
@@ -505,21 +655,20 @@ def update_grading_session_endpoint(
     session.add(grading_session)
     session.commit()
     session.refresh(grading_session)
-    return grading_session
+    return GradingSessionRead.model_validate(grading_session)
 
 @app.post("/submissions", response_model=SubmissionDetail)
-def create_submission(payload: SubmissionCreate, session: Session = Depends(_get_db)) -> SubmissionDetail:
-    exam = session.get(Exam, payload.exam_id)
-    if not exam:
-        raise HTTPException(status_code=404, detail="未找到对应考试")
-    student = session.get(Student, payload.student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="未找到对应学生")
+def create_submission(
+    payload: SubmissionCreate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> SubmissionDetail:
+    exam = _require_exam(session, payload.exam_id, current_user)
+    student = _require_student(session, payload.student_id, current_user)
 
-    submission = Submission(**payload.model_dump())
+    submission = Submission(**payload.model_dump(), owner_id=current_user.id)
     session.add(submission)
     session.commit()
-    session.refresh(submission)
     session.refresh(submission, attribute_names=["responses"])
 
     return SubmissionDetail.model_validate(submission)
@@ -530,11 +679,14 @@ def list_submissions(
     exam_id: Optional[int] = None,
     student_id: Optional[int] = None,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[SubmissionDetail]:
-    stmt = select(Submission)
+    stmt = select(Submission).where(Submission.owner_id == current_user.id)
     if exam_id is not None:
+        _require_exam(session, exam_id, current_user)
         stmt = stmt.where(Submission.exam_id == exam_id)
     if student_id is not None:
+        _require_student(session, student_id, current_user)
         stmt = stmt.where(Submission.student_id == student_id)
     stmt = stmt.order_by(Submission.submitted_at.desc())
     submissions = session.exec(stmt).all()
@@ -550,10 +702,12 @@ def list_submission_history(
     status: Optional[str] = None,
     limit: int = 20,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[SubmissionHistoryEntry]:
     safe_limit = max(1, min(limit or 20, 100))
     stmt = (
         select(Submission)
+        .where(Submission.owner_id == current_user.id)
         .options(
             selectinload(Submission.student),
             selectinload(Submission.responses),
@@ -561,8 +715,10 @@ def list_submission_history(
         )
     )
     if exam_id is not None:
+        _require_exam(session, exam_id, current_user)
         stmt = stmt.where(Submission.exam_id == exam_id)
     if student_id is not None:
+        _require_student(session, student_id, current_user)
         stmt = stmt.where(Submission.student_id == student_id)
     if status:
         try:
@@ -575,7 +731,7 @@ def list_submission_history(
     history_entries: List[SubmissionHistoryEntry] = []
     for submission in submissions:
         student = submission.student or session.get(Student, submission.student_id)
-        if student is None:
+        if student is None or student.owner_id != current_user.id:
             continue
 
         extra = submission.extra_metadata if isinstance(submission.extra_metadata, dict) else {}
@@ -624,10 +780,12 @@ def list_submission_history(
 
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionDetail)
-def get_submission(submission_id: int, session: Session = Depends(_get_db)) -> SubmissionDetail:
-    submission = session.get(Submission, submission_id)
-    if not submission:
-        raise HTTPException(status_code=404, detail="未找到该份提交记录")
+def get_submission(
+    submission_id: int,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> SubmissionDetail:
+    submission = _require_submission(session, submission_id, current_user)
     session.refresh(submission, attribute_names=["responses"])
     return SubmissionDetail.model_validate(submission)
 
@@ -638,19 +796,16 @@ async def upload_submission(
     exam_id: int = Form(...),
     image: UploadFile = File(...),
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> SubmissionProcessingResult:
-    exam = session.get(Exam, exam_id)
-    if not exam:
-        raise HTTPException(status_code=404, detail="未找到对应考试")
-    student = session.get(Student, student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="未找到对应学生")
+    exam = _require_exam(session, exam_id, current_user)
+    student = _require_student(session, student_id, current_user)
 
     image_bytes = await image.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="上传的图片为空")
 
-    submission = Submission(student_id=student_id, exam_id=exam_id)
+    submission = Submission(student_id=student_id, exam_id=exam_id, owner_id=current_user.id)
     session.add(submission)
     session.commit()
     session.refresh(submission)
@@ -774,10 +929,9 @@ async def upload_submission(
 def list_submission_logs(
     submission_id: int,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ProcessingLogList:
-    submission = session.get(Submission, submission_id)
-    if submission is None:
-        raise HTTPException(status_code=404, detail="未找到对应的提交记录")
+    _require_submission(session, submission_id, current_user)
 
     stmt = (
         select(ProcessingLog)
@@ -792,10 +946,13 @@ def list_submission_logs(
 def update_manual_score(
     payload: ManualScoreUpdate,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ResponseRead:
     response = session.get(Response, payload.response_id)
     if response is None:
         raise HTTPException(status_code=404, detail="未找到作答记录")
+
+    submission = _require_submission(session, response.submission_id, current_user)
 
     response.score = payload.new_score
     response.comments = payload.new_comment
@@ -806,17 +963,15 @@ def update_manual_score(
     session.commit()
     session.refresh(response)
 
-    submission = session.get(Submission, response.submission_id)
-    if submission is not None:
-        session.refresh(submission, attribute_names=["responses"])
-        scored = [
-            item.score or 0.0
-            for item in submission.responses
-            if item.score is not None and item.applies_to_student
-        ]
-        submission.total_score = sum(scored) if scored else submission.total_score
-        session.add(submission)
-        session.commit()
+    session.refresh(submission, attribute_names=["responses"])
+    scored = [
+        item.score or 0.0
+        for item in submission.responses
+        if item.score is not None and item.applies_to_student
+    ]
+    submission.total_score = sum(scored) if scored else submission.total_score
+    session.add(submission)
+    session.commit()
 
     log_entry = ProcessingLog(
         submission_id=response.submission_id,
@@ -836,13 +991,29 @@ def update_manual_score(
 
 
 @app.get("/students/{student_id}/mistakes", response_model=List[MistakeRead])
-def list_student_mistakes(student_id: int, session: Session = Depends(_get_db)) -> List[MistakeRead]:
-    return _list_student_mistakes(session, student_id)
+def list_student_mistakes(
+    student_id: int,
+    knowledge_tag: Optional[str] = None,
+    status: Optional[str] = None,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[MistakeRead]:
+    return _list_student_mistakes(
+        session,
+        student_id,
+        current_user,
+        knowledge_tag=knowledge_tag,
+        status=status,
+    )
 
 
 @app.get("/demo/students/{student_id}/profile", response_model=StudentProfileRead)
-def get_student_profile(student_id: int, session: Session = Depends(_get_db)) -> StudentProfileRead:
-    student = _require_student(session, student_id)
+def get_student_profile(
+    student_id: int,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> StudentProfileRead:
+    student = _require_student(session, student_id, current_user)
     profile = refresh_student_profile_stats(session, student_id)
     session.refresh(profile)
     return _build_student_profile_schema(student, profile)
@@ -853,8 +1024,9 @@ def update_student_profile(
     student_id: int,
     payload: StudentProfileUpdate,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> StudentProfileRead:
-    student = _require_student(session, student_id)
+    student = _require_student(session, student_id, current_user)
     profile = ensure_student_profile(session, student_id)
     data = payload.model_dump(exclude_unset=True)
 
@@ -882,10 +1054,12 @@ def list_student_mistakes_demo(
     knowledge_tag: Optional[str] = None,
     status: Optional[str] = None,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[MistakeRead]:
     return _list_student_mistakes(
         session,
         student_id,
+        current_user,
         knowledge_tag=knowledge_tag,
         status=status,
     )
@@ -899,7 +1073,9 @@ def build_student_analysis_context(
     student_id: int,
     payload: AnalysisContextRequest,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> AnalysisContextPreview:
+    _require_student(session, student_id, current_user)
     try:
         context, _ = build_analysis_context(
             session,
@@ -918,7 +1094,9 @@ def create_student_analysis(
     student_id: int,
     payload: AnalysisRequest,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> MistakeAnalysisRead:
+    _require_student(session, student_id, current_user)
     try:
         analysis = perform_student_analysis(
             session,
@@ -946,7 +1124,9 @@ def get_student_analysis_history(
     student_id: int,
     limit: int = 10,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> MistakeAnalysisHistory:
+    _require_student(session, student_id, current_user)
     analyses = list_analysis_history(session, student_id=student_id, limit=limit)
     items = [MistakeAnalysisRead.model_validate(item) for item in analyses]
     return MistakeAnalysisHistory(items=items)
@@ -960,7 +1140,9 @@ def cleanup_student_analysis_history(
     student_id: int,
     payload: AnalysisCleanupRequest,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> AnalysisCleanupResult:
+    _require_student(session, student_id, current_user)
     if not payload.analysis_ids and payload.before_timestamp is None:
         raise HTTPException(status_code=400, detail="请提供清理条件")
 
@@ -976,7 +1158,9 @@ def cleanup_student_analysis_history(
 def create_practice_assignment_endpoint(
     payload: PracticeAssignmentCreate,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> PracticeAssignmentRead:
+    _require_student(session, payload.student_id, current_user)
     try:
         assignment = generate_practice_assignment(
             session,
@@ -988,6 +1172,9 @@ def create_practice_assignment_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    assignment.owner_id = current_user.id
+    session.add(assignment)
+    session.commit()
     session.refresh(assignment, attribute_names=["items"])
     return PracticeAssignmentRead.model_validate(assignment)
 
@@ -996,9 +1183,13 @@ def create_practice_assignment_endpoint(
 def list_practice_assignments(
     student_id: Optional[int] = None,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[PracticeAssignmentRead]:
-    stmt = select(PracticeAssignment).options(selectinload(PracticeAssignment.items))
+    stmt = select(PracticeAssignment).where(PracticeAssignment.owner_id == current_user.id).options(
+        selectinload(PracticeAssignment.items)
+    )
     if student_id is not None:
+        _require_student(session, student_id, current_user)
         stmt = stmt.where(PracticeAssignment.student_id == student_id)
     stmt = stmt.order_by(PracticeAssignment.scheduled_for.desc())
     assignments = session.exec(stmt).all()
@@ -1011,10 +1202,9 @@ def list_practice_assignments(
 def update_practice_completion(
     payload: PracticeCompletionUpdate,
     session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
 ) -> PracticeAssignmentRead:
-    assignment = session.get(PracticeAssignment, payload.assignment_id)
-    if assignment is None:
-        raise HTTPException(status_code=404, detail="未找到练习任务")
+    assignment = _require_practice_assignment(session, payload.assignment_id, current_user)
 
     assignment.status = PracticeStatus.completed if payload.completed else PracticeStatus.assigned
     session.add(assignment)
@@ -1174,9 +1364,13 @@ def refresh_demo_data() -> dict[str, object]:
 
 
 @app.get("/practice/{assignment_id}/pdf")
-def download_practice_pdf(assignment_id: int, session: Session = Depends(_get_db)):
-    assignment = session.get(PracticeAssignment, assignment_id)
-    if assignment is None or not assignment.generated_pdf_path:
+def download_practice_pdf(
+    assignment_id: int,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+):
+    assignment = _require_practice_assignment(session, assignment_id, current_user)
+    if not assignment.generated_pdf_path:
         raise HTTPException(status_code=404, detail="尚未生成对应的练习卷 PDF")
     pdf_path = Path(assignment.generated_pdf_path)
     if not pdf_path.exists():

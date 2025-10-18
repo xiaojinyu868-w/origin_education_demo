@@ -1,5 +1,5 @@
 ﻿import zhCN from "antd/locale/zh_CN";
-import { ApiOutlined, MenuOutlined, UploadOutlined } from "@ant-design/icons";
+import { ApiOutlined, LogoutOutlined, MenuOutlined, UploadOutlined } from "@ant-design/icons";
 import {
   Button,
   ConfigProvider,
@@ -25,7 +25,11 @@ import { WizardProvider } from "./grading-wizard/WizardProvider";
 import DesktopNav from "./components/DesktopNav";
 import MobileNav from "./components/MobileNav";
 import useResponsive from "./hooks/useResponsive";
+import { AuthProvider } from "./context/AuthContext";
+import useAuth from "./hooks/useAuth";
+import AuthPage from "./pages/AuthPage";
 import type { NavItem, NavKey, NavComponent } from "./types/navigation";
+import { safeStorage } from "./utils/storage";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const RosterSetup = lazy(() => import("./pages/RosterSetup"));
@@ -129,7 +133,8 @@ type FeedbackFormValues = {
 const ALLOWED_FEEDBACK_TYPES: string[] = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const MAX_FEEDBACK_FILE_SIZE = 3 * 1024 * 1024;
 
-const App = () => {
+const AppLayout = () => {
+  const { user, logout } = useAuth();
   const responsive = useResponsive();
   const isMobile = responsive.isMobile;
   const isTablet = responsive.isTablet;
@@ -212,7 +217,7 @@ const App = () => {
 
   const applyStoredFeedbackProfile = useCallback(() => {
     try {
-      const stored = localStorage.getItem("teacherFeedbackProfile");
+      const stored = safeStorage.get("teacherFeedbackProfile");
       const baseValues: FeedbackFormValues = {
         content: "",
         is_anonymous: false,
@@ -325,7 +330,7 @@ const App = () => {
     try {
       const response = await submitTeacherFeedback(formData);
       if (!isAnonymous) {
-        localStorage.setItem(
+        safeStorage.set(
           "teacherFeedbackProfile",
           JSON.stringify({ teacher_name: trimmedName ?? "", teacher_email: trimmedEmail ?? "" }),
         );
@@ -450,6 +455,11 @@ const App = () => {
               </Space>
             </div>
             <Space size={isCompactLayout ? 8 : 12} align="center">
+              {!isCompactLayout && user && (
+                <Text type="secondary" style={{ marginRight: 4 }}>
+                  {user.name}
+                </Text>
+              )}
               {llmStatus !== "unknown" && (
                 <Tag color={llmStatus === "available" ? "success" : "warning"}>
                   {llmStatus === "available" ? "接口可用" : "待配置接口"}
@@ -477,6 +487,16 @@ const App = () => {
                 onClick={() => handleNavigate("upload")}
               >
                 {isCompactLayout ? "上传试卷" : "开始上传"}
+              </Button>
+              <Button
+                icon={<LogoutOutlined />}
+                onClick={logout}
+                type={isCompactLayout ? "text" : "default"}
+                shape={isCompactLayout ? "circle" : undefined}
+                size={isCompactLayout ? "large" : "middle"}
+                aria-label="退出登录"
+              >
+                {!isCompactLayout && "退出登录"}
               </Button>
             </Space>
           </Header>
@@ -574,6 +594,31 @@ const App = () => {
   );
 };
 
-export default App;
+const AppGate: React.FC = () => {
+  const { user, loading } = useAuth();
+  const location = useLocation();
 
+  if (loading) {
+    return (
+      <div className="app-suspense">
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    const redirectTarget = `${location.pathname}${location.search}`;
+    return <AuthPage redirectPath={redirectTarget} />;
+  }
+
+  return <AppLayout />;
+};
+
+const App: React.FC = () => (
+  <AuthProvider>
+    <AppGate />
+  </AuthProvider>
+);
+
+export default App;
 

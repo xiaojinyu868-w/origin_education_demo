@@ -5,6 +5,13 @@ export type AnswerStatus = "draft" | "confirmed";
 export type ResponseReviewStatus = "pending" | "confirmed" | "needs_review";
 export type SessionStatus = "active" | "completed" | "cancelled";
 
+export interface User {
+  id: number;
+  email: string;
+  name: string;
+  is_demo: boolean;
+}
+
 export interface Student {
   id: number;
   name: string;
@@ -231,4 +238,9 @@ export interface SubmissionHistoryEntry {
 
 export interface ProcessingLogList {
   items: ProcessingLog[];
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
 }

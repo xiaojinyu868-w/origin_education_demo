@@ -44,11 +44,51 @@ class PracticeStatus(str, Enum):
     completed = "completed"
 
 
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(sa_column=Column(String, unique=True, index=True, nullable=False))
+    hashed_password: str = Field(sa_column=Column(String, nullable=False))
+    name: str = Field(sa_column=Column(String, nullable=False))
+    is_demo: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    teachers: list["Teacher"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("Teacher", back_populates="owner"),
+    )
+    classrooms: list["Classroom"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("Classroom", back_populates="owner"),
+    )
+    exams: list["Exam"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("Exam", back_populates="owner"),
+    )
+    grading_sessions: list["GradingSession"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("GradingSession", back_populates="owner"),
+    )
+    submissions: list["Submission"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("Submission", back_populates="owner"),
+    )
+    students: list["Student"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("Student", back_populates="owner"),
+    )
+    practice_assignments: list["PracticeAssignment"] = Relationship(
+        back_populates="owner",
+        sa_relationship=relationship("PracticeAssignment", back_populates="owner"),
+    )
+
+
 class Student(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     email: Optional[str] = Field(default=None, index=True)
     grade_level: Optional[str] = None
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
 
     enrollments: list["ClassEnrollment"] = Relationship(
         back_populates="student",
@@ -74,6 +114,10 @@ class Student(SQLModel, table=True):
         back_populates="student",
         sa_relationship=relationship("MistakeAnalysis", back_populates="student"),
     )
+    owner: Optional["User"] = Relationship(
+        back_populates="students",
+        sa_relationship=relationship("User", back_populates="students"),
+    )
 
 
 class StudentProfile(SQLModel, table=True):
@@ -96,6 +140,7 @@ class Teacher(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     email: Optional[str] = Field(default=None, index=True)
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
 
     classes: list["Classroom"] = Relationship(
         back_populates="teacher",
@@ -113,6 +158,10 @@ class Teacher(SQLModel, table=True):
         back_populates="teacher",
         sa_relationship=relationship("TeacherFeedback", back_populates="teacher"),
     )
+    owner: Optional["User"] = Relationship(
+        back_populates="teachers",
+        sa_relationship=relationship("User", back_populates="teachers"),
+    )
 
 
 
@@ -120,6 +169,7 @@ class GradingSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     teacher_id: int = Field(foreign_key="teacher.id", index=True)
     exam_id: Optional[int] = Field(default=None, foreign_key="exam.id")
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     current_step: int = Field(default=1)
     status: SessionStatus = Field(default=SessionStatus.active, index=True)
     payload: Optional[dict] = Field(default=None, sa_column=Column(JSON))
@@ -135,12 +185,17 @@ class GradingSession(SQLModel, table=True):
         back_populates="grading_sessions",
         sa_relationship=relationship("Exam", back_populates="grading_sessions"),
     )
+    owner: Optional["User"] = Relationship(
+        back_populates="grading_sessions",
+        sa_relationship=relationship("User", back_populates="grading_sessions"),
+    )
 
 class Classroom(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     grade_level: Optional[str] = None
     teacher_id: int = Field(foreign_key="teacher.id")
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
 
     teacher: Optional["Teacher"] = Relationship(
         back_populates="classes",
@@ -149,6 +204,10 @@ class Classroom(SQLModel, table=True):
     enrollments: list["ClassEnrollment"] = Relationship(
         back_populates="classroom",
         sa_relationship=relationship("ClassEnrollment", back_populates="classroom"),
+    )
+    owner: Optional["User"] = Relationship(
+        back_populates="classrooms",
+        sa_relationship=relationship("User", back_populates="classrooms"),
     )
 
 
@@ -174,6 +233,7 @@ class Exam(SQLModel, table=True):
     scheduled_date: Optional[date] = None
     teacher_id: int = Field(foreign_key="teacher.id")
     classroom_id: Optional[int] = Field(default=None, foreign_key="classroom.id")
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     answer_key_version: int = Field(default=1)
     source_image_path: Optional[str] = None
     parsed_outline: Optional[dict] = Field(default=None, sa_column=Column(JSON))
@@ -194,6 +254,10 @@ class Exam(SQLModel, table=True):
     grading_sessions: list["GradingSession"] = Relationship(
         back_populates="exam",
         sa_relationship=relationship("GradingSession", back_populates="exam"),
+    )
+    owner: Optional["User"] = Relationship(
+        back_populates="exams",
+        sa_relationship=relationship("User", back_populates="exams"),
     )
 
 
@@ -233,6 +297,7 @@ class Submission(SQLModel, table=True):
     student_id: int = Field(foreign_key="student.id")
     exam_id: int = Field(foreign_key="exam.id")
     submitted_at: datetime = Field(default_factory=datetime.utcnow)
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     total_score: Optional[float] = None
     status: SubmissionStatus = Field(default=SubmissionStatus.pending, index=True)
     raw_ocr_payload: Optional[dict] = Field(default=None, sa_column=Column(JSON))
@@ -257,6 +322,10 @@ class Submission(SQLModel, table=True):
             back_populates="submission",
             cascade="all, delete-orphan",
         ),
+    )
+    owner: Optional["User"] = Relationship(
+        back_populates="submissions",
+        sa_relationship=relationship("User", back_populates="submissions"),
     )
 
 
@@ -324,6 +393,7 @@ class PracticeAssignment(SQLModel, table=True):
     status: PracticeStatus = Field(default=PracticeStatus.scheduled, index=True)
     config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     generated_pdf_path: Optional[str] = None
+    owner_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
 
     student: Optional["Student"] = Relationship(
         back_populates="practice_assignments",
@@ -332,6 +402,10 @@ class PracticeAssignment(SQLModel, table=True):
     items: list["PracticeItem"] = Relationship(
         back_populates="assignment",
         sa_relationship=relationship("PracticeItem", back_populates="assignment"),
+    )
+    owner: Optional["User"] = Relationship(
+        back_populates="practice_assignments",
+        sa_relationship=relationship("User", back_populates="practice_assignments"),
     )
 
 

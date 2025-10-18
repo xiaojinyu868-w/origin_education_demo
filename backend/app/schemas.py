@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from .models import (
     AnswerStatus,
@@ -14,6 +14,28 @@ from .models import (
     SessionStatus,
     SubmissionStatus,
 )
+
+
+class UserRegisterRequest(BaseModel):
+    email: EmailStr
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=128)
+    create_demo_data: bool = False
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserRead(BaseModel):
+    id: int
+    email: EmailStr
+    name: str
+    is_demo: bool
+
+    class Config:
+        from_attributes = True
 
 
 class StudentBase(BaseModel):

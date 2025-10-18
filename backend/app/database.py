@@ -66,6 +66,8 @@ def apply_lightweight_migrations() -> None:
             connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN source_image_path TEXT")
         if "parsed_outline" not in exam_columns:
             connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN parsed_outline JSON")
+        if "owner_id" not in exam_columns:
+            connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN owner_id INTEGER")
 
         submission_columns = _column_names("submission")
         if "session_id" not in submission_columns:
@@ -76,6 +78,8 @@ def apply_lightweight_migrations() -> None:
             connection.exec_driver_sql("ALTER TABLE submission ADD COLUMN status_detail TEXT")
         if "ai_trace_id" not in submission_columns:
             connection.exec_driver_sql("ALTER TABLE submission ADD COLUMN ai_trace_id TEXT")
+        if "owner_id" not in submission_columns:
+            connection.exec_driver_sql("ALTER TABLE submission ADD COLUMN owner_id INTEGER")
 
         mistake_columns = _column_names("mistake")
         if "error_count" not in mistake_columns:
@@ -88,6 +92,26 @@ def apply_lightweight_migrations() -> None:
             )
         if "root_cause" not in mistake_columns:
             connection.exec_driver_sql("ALTER TABLE mistake ADD COLUMN root_cause TEXT")
+
+        teacher_columns = _column_names("teacher")
+        if "owner_id" not in teacher_columns:
+            connection.exec_driver_sql("ALTER TABLE teacher ADD COLUMN owner_id INTEGER")
+
+        student_columns = _column_names("student")
+        if "owner_id" not in student_columns:
+            connection.exec_driver_sql("ALTER TABLE student ADD COLUMN owner_id INTEGER")
+
+        classroom_columns = _column_names("classroom")
+        if "owner_id" not in classroom_columns:
+            connection.exec_driver_sql("ALTER TABLE classroom ADD COLUMN owner_id INTEGER")
+
+        grading_session_columns = _column_names("gradingsession")
+        if "owner_id" not in grading_session_columns:
+            connection.exec_driver_sql("ALTER TABLE gradingsession ADD COLUMN owner_id INTEGER")
+
+        practice_assignment_columns = _column_names("practiceassignment")
+        if "owner_id" not in practice_assignment_columns:
+            connection.exec_driver_sql("ALTER TABLE practiceassignment ADD COLUMN owner_id INTEGER")
 
 
 def reset_database() -> None:

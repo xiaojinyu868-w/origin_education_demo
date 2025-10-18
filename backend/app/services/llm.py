@@ -26,8 +26,9 @@ def _read_env(var_name: str, fallback: Optional[str] = None) -> Optional[str]:
 
 
 def reset_llm_client_cache() -> None:
-    """Clear cached OpenAI client so that updated配置马上生效。"""
-    _get_client.cache_clear()  # type: ignore[attr-defined]\n    get_qwen_client.cache_clear()  # type: ignore[attr-defined]
+    """Clear cached LLM clients so new credentials take effect immediately."""
+    _get_client.cache_clear()  # type: ignore[attr-defined]
+    get_qwen_client.cache_clear()  # type: ignore[attr-defined]
 
 
 def set_llm_credentials(
@@ -38,9 +39,9 @@ def set_llm_credentials(
     vision_model: Optional[str] = None,
 ) -> None:
     if not api_key:
-        raise ValueError("API Key 不能为空")
-
+        raise ValueError("API key must not be empty.")
     os.environ["DASHSCOPE_API_KEY"] = api_key
+    os.environ["QWEN_API_KEY"] = api_key
     if base_url:
         os.environ["QWEN_BASE_URL"] = base_url
     if text_model:
@@ -56,7 +57,7 @@ def _get_client() -> OpenAI:
     api_key = _read_env("DASHSCOPE_API_KEY") or _read_env("QWEN_API_KEY")
     if not api_key:
         raise LLMNotConfiguredError(
-            "未检测到 DASHSCOPE_API_KEY（或 QWEN_API_KEY）环境变量，无法调用大模型服务。",
+            "Missing DASHSCOPE_API_KEY (or QWEN_API_KEY); cannot reach the Qwen service.",
         )
 
     base_url = _read_env("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -68,13 +69,38 @@ def _parse_json_payload(content: str) -> Dict[str, Any]:
     if not text:
         raise LLMInvocationError("大模型返回内容为空，无法解析。")
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        raise LLMInvocationError("大模型返回内容无法解析为 JSON：{}".format(text[:200]))
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        if text.endswith("```"):
+            text = text[: -3].strip()
+
+    def _try_load(candidate: str) -> Optional[Dict[str, Any]]:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+
+    parsed = _try_load(text)
+    if parsed is not None:
+        return parsed
+
+    for opening, closing in (("{", "}"), ("[", "]")):
+        depth = 0
+        start_index: Optional[int] = None
+        for index, char in enumerate(text):
+            if char == opening:
+                if depth == 0:
+                    start_index = index
+                depth += 1
+            elif char == closing and depth > 0:
+                depth -= 1
+                if depth == 0 and start_index is not None:
+                    candidate = text[start_index : index + 1]
+                    parsed = _try_load(candidate)
+                    if parsed is not None:
+                        return parsed
+
+    raise LLMInvocationError("大模型返回内容无法解析为 JSON：{snippet}".format(snippet=text[:200]))
 
 
 
@@ -84,7 +110,7 @@ def _build_data_url(image_bytes: bytes, *, mime_type: str = "image/png") -> str:
 
 
 class QwenClient:
-    """封装通义千问 qwen3-vl-plus 多模态 JSON 调用。"""
+    """Wrapper around the qwen3-vl-plus multimodal API for JSON outputs."""
 
     def __init__(self) -> None:
         self._client = _get_client()
@@ -112,13 +138,13 @@ class QwenClient:
                     temperature=temperature,
                 )
                 if not response.choices:
-                    raise LLMInvocationError("大模型未返回任何结果。")
+                    raise LLMInvocationError("LLM returned no choices.")
                 content = response.choices[0].message.content or ""
                 return _parse_json_payload(content)
             except Exception as exc:  # noqa: BLE001 - propagate after retries
                 last_error = exc
         raise LLMInvocationError(
-            "大模型返回异常，已重试 {retries} 次：{error}".format(
+            "LLM response failed after {retries} retries: {error}".format(
                 retries=max_retries,
                 error=last_error,
             ),
@@ -126,17 +152,17 @@ class QwenClient:
 
     def parse_exam_outline(self, image_bytes: bytes, *, locale: str = "zh-CN") -> Dict[str, Any]:
         system_prompt = (
-            "你是一名资深教研员，需要从试卷扫描件中提取结构化信息。"
-            "任何时候都必须输出 JSON，且字段命名需使用驼峰式英文。"
+            "You are an experienced curriculum specialist who extracts structured data from exam scans."
+            "Always respond with JSON using camelCase field names."
         )
         user_instruction = (
-            "请阅读上传的整张试卷扫描件，并输出 JSON。\n"
-            "JSON 结构：{\"title\": str, \"subject\": str, \"questions\": ["
+            "Review the uploaded exam image carefully and return only JSON.\n"
+            "Schema: {\"title\": str, \"subject\": str, \"questions\": ["
             "{\"number\": str, \"type\": \"multiple_choice|fill_in_blank|subjective\", "
-            "\"prompt\": str, \"maxScore\": number, \"answerKey\": object, \"options\": list 或 null}]。\n"
-            "\"answerKey\" 字段需要包含批改所需的全部标准答案信息，例如多选题使用 {\"correct\": \"A\", \"options\": [\"A\", \"B\", ...]}，"
-            "填空题可使用 {\"acceptableAnswers\": [...], \"numeric\": bool, \"numericTolerance\": number}。\n"
-            "请勿输出除 JSON 外的任何文本。"
+            "\"prompt\": str, \"maxScore\": number, \"answerKey\": object, \"options\": list | null}]}\n"
+            "The answerKey must contain everything needed for grading. For example, multiple choice questions can use {\"correct\": \"A\", \"options\": [\"A\", \"B\", ...]}."
+            "For fill-in-the-blank questions, use {\"acceptableAnswers\": [...], \"numeric\": bool, \"numericTolerance\": number}.\n"
+            "Do not include any text outside of the JSON payload."
         )
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -150,7 +176,7 @@ class QwenClient:
         ]
         payload = self._request_json(messages)
         if "questions" not in payload:
-            raise LLMInvocationError("大模型返回数据缺少 questions 字段。")
+            raise LLMInvocationError("LLM payload is missing the questions field.")
         return payload
 
     def grade_exam_submission(
@@ -163,23 +189,22 @@ class QwenClient:
     ) -> Dict[str, Any]:
         exam_json = json.dumps(exam_outline, ensure_ascii=False)
         system_prompt = (
-            "你是一名经验丰富的阅卷老师，需要根据标准答案和学生的作答图像给出评分。"
-            "始终返回 JSON，不要输出多余文本。"
+            "You are an experienced exam grader. Use the answer key and the student's scanned responses to assign scores."
+            "Always return JSON and avoid any extra commentary."
         )
         user_prompt = (
-            f"以下是试卷的结构与标准答案 JSON：\n```json\n{exam_json}\n```\n"
-            "请认真阅读学生的完整试卷图片，根据标准答案逐题给分。\n"
-            "输出 JSON：{\"matchingScore\": number, \"responses\": ["
-            "{\"questionNumber\": str, \"studentAnswer\": str 或 null, \"normalizedAnswer\": str 或 null, "
-            "\"score\": number 或 null, \"isCorrect\": bool 或 null, \"aiConfidence\": number, "
-            "\"comments\": str 或 null, \"needsReview\": bool }], \"mistakes\": ["
-            "{\"questionNumber\": str, \"knowledgeTags\": str 或 null, \"explanation\": str 或 null}],"
-            " \"processingSteps\": [{\"name\": str, \"status\": \"success|warning|error\", \"detail\": str 或 null}],"
-            " \"summary\": str }。\n"
-            "若无法确认某题答案，请将该题标记 needsReview=true，并在 comments 中说明原因。"
+            f"Here is the exam outline and answer key in JSON format:\n```json\n{exam_json}\n```\n"
+            "Review the student's complete exam image carefully and grade each question according to the answer key.\n"
+            "Return JSON shaped as {\"matchingScore\": number, \"responses\": ["
+            "{\"questionNumber\": str, \"studentAnswer\": str | null, \"normalizedAnswer\": str | null, "
+            "\"score\": number | null, \"isCorrect\": bool | null, \"aiConfidence\": number, "
+            "\"comments\": str | null, \"needsReview\": bool }], \"mistakes\": ["
+            "{\"questionNumber\": str, \"knowledgeTags\": str | null, \"explanation\": str | null}], "
+            "\"processingSteps\": [{\"name\": str, \"status\": \"success|warning|error\", \"detail\": str | null}], \"summary\": str }.\n"
+            "If an answer cannot be verified, set needsReview=true for that question and explain the reason in comments."
         )
         if extra_instructions:
-            user_prompt += f"\n额外说明：{extra_instructions}"
+            user_prompt += f"\nAdditional instructions: {extra_instructions}"
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -193,7 +218,7 @@ class QwenClient:
         ]
         payload = self._request_json(messages, temperature=0.1)
         if "responses" not in payload:
-            raise LLMInvocationError("大模型返回数据缺少 responses 字段。")
+            raise LLMInvocationError("LLM payload is missing the responses field.")
         return payload
 
 
@@ -240,7 +265,10 @@ def run_vision_ocr(image_bytes: bytes) -> Tuple[List[Dict[str, Optional[str]]], 
     messages = [
         {
             "role": "system",
-            "content": "你是一名中文试卷智能批改助手，需要从图像中准确提取每一道题目的题号、学生答案文本以及教师批注。请输出 JSON。",
+            "content": (
+                "You are an OCR assistant for Chinese exams. Extract every question number, the student's answer text, "
+                "and any teacher annotations. Return JSON only."
+            ),
         },
         {
             "role": "user",
@@ -252,10 +280,10 @@ def run_vision_ocr(image_bytes: bytes) -> Tuple[List[Dict[str, Optional[str]]], 
                 {
                     "type": "text",
                     "text": (
-                        "请识别图中的所有题目，严格按照如下 JSON 结构返回结果：\n"
-                        "{\"rows\": [{\"question_number\": \"题号\", \"raw_text\": \"学生原始答案\", "
-                        "\"annotation\": \"教师批注（若无则为 null）\", \"confidence\": 介于0-1的置信度 }]}。\n"
-                        "题号请使用阿拉伯数字，不要添加多余的文字。若识别不到批注或答案，使用 null 或空字符串。"
+                        "Read every question in the image and return the results using this JSON structure:\n"
+                        "{\"rows\": [{\"question_number\": \"Question number\", \"raw_text\": \"Student answer\", "
+                        "\"annotation\": \"Teacher annotation (null if none)\", \"confidence\": value_between_0_and_1 }]}\n"
+                        "Use Arabic numerals for question numbers. If an annotation or answer is missing, use null or an empty string."
                     ),
                 },
             ],
@@ -269,11 +297,14 @@ def run_vision_ocr(image_bytes: bytes) -> Tuple[List[Dict[str, Optional[str]]], 
     )
 
     if not response.choices:
-        raise LLMInvocationError("大模型未返回任何结果。")
+        raise LLMInvocationError("LLM returned no results.")
 
     content = response.choices[0].message.content or ""
     payload = _parse_json_payload(content)
-    rows_payload = payload.get("rows") or payload.get("questions") or []
+    if isinstance(payload, list):
+        rows_payload = payload
+    else:
+        rows_payload = payload.get("rows") or payload.get("questions") or []
 
     rows: List[Dict[str, Optional[str]]] = []
     for item in rows_payload:
@@ -295,7 +326,7 @@ def run_vision_ocr(image_bytes: bytes) -> Tuple[List[Dict[str, Optional[str]]], 
         )
 
     if not rows:
-        raise LLMInvocationError("大模型未识别到有效的题目信息。")
+        raise LLMInvocationError("LLM did not produce any valid question metadata.")
 
     return rows, content
 
@@ -313,26 +344,26 @@ def score_subjective_answer(
     client = _get_client()
     model_name = _read_env("QWEN_TEXT_MODEL", "qwen-max")
 
-    rubric_text = json.dumps(rubric, ensure_ascii=False, indent=2) if rubric else "无"
-    reference_text = json.dumps(reference_answer, ensure_ascii=False, indent=2) if reference_answer else "无"
+    rubric_text = json.dumps(rubric, ensure_ascii=False, indent=2) if rubric else "N/A"
+    reference_text = json.dumps(reference_answer, ensure_ascii=False, indent=2) if reference_answer else "N/A"
 
     messages = [
         {
             "role": "system",
             "content": (
-                "你是一名严谨的阅卷老师，请根据题目、参考答案与评分标准，对学生的简答题作答给出得分（0-"
-                + str(max_score)
-                + "）并提供一句中文点评。评分务必遵循评分标准，输出 JSON，字段包含 score(数字)、explanation(字符串)。"
+                "You are a meticulous grader. Using the prompt, reference answer, and rubric, "
+                f"assign a score between 0 and {max_score} inclusive and provide one sentence of feedback. "
+                "Return JSON with fields score (number) and explanation (string)."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"题目：{question_prompt}\n\n"
-                f"参考答案：{reference_text}\n\n"
-                f"评分标准：{rubric_text}\n\n"
-                f"学生作答：{student_answer}\n\n"
-                "请输出 JSON 对象，例如 {\"score\": 3, \"explanation\": \"评价\"}。"
+                f"Question: {question_prompt}\n\n"
+                f"Reference answer: {reference_text}\n\n"
+                f"Rubric: {rubric_text}\n\n"
+                f"Student answer: {student_answer}\n\n"
+                "Return a JSON object like {\"score\": 3, \"explanation\": \"Short feedback\"}."
             ),
         },
     ]
@@ -344,7 +375,7 @@ def score_subjective_answer(
     )
 
     if not response.choices:
-        raise LLMInvocationError("大模型未返回评分结果。")
+        raise LLMInvocationError("LLM did not return a scoring result.")
 
     payload = _parse_json_payload(response.choices[0].message.content or "")
     score = payload.get("score")
@@ -353,12 +384,12 @@ def score_subjective_answer(
     try:
         numeric_score = float(score)
     except (TypeError, ValueError):
-        raise LLMInvocationError("大模型返回的得分无效：{}".format(score))
+        raise LLMInvocationError("澶фā鍨嬭繑鍥炵殑寰楀垎鏃犳晥锛歿}".format(score))
 
     bounded_score = max(0.0, min(numeric_score, max_score))
     return {
         "score": round(bounded_score, 2),
-        "explanation": str(explanation).strip() or "AI 评分成功，但未提供详细说明。",
+        "explanation": str(explanation).strip() or "AI grading succeeded but no explanation was provided.",
     }
 
 
@@ -384,27 +415,27 @@ def summarize_submission(responses: List[Dict[str, Any]]) -> str:
         )
 
     prompt = (
-        "以下是学生作答的批改结果，请用 2 句话总结整体表现，并给出下一步建议：\n"
+        "Below are the grading results for the student. Summarize the overall performance in at most two sentences and provide a next-step suggestion:\n"
         + json.dumps(compact_rows, ensure_ascii=False)
     )
 
     response = client.chat.completions.create(
         model=model_name,
         messages=[
-            {"role": "system", "content": "你是一名班主任，需要给教师生成简洁可执行的点评。"},
+            {"role": "system", "content": "You are a homeroom teacher who writes concise, actionable feedback for other teachers."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.4,
     )
 
     if not response.choices:
-        raise LLMInvocationError("大模型未返回总结。")
+        raise LLMInvocationError("LLM did not return a summary.")
 
     return (response.choices[0].message.content or "").strip()
 
 
 def analyze_student_profile(context: Dict[str, Any]) -> Dict[str, Any]:
-    """调用通义千问对学生档案与错题上下文进行分析。"""
+    """Use Qwen to analyze a student profile and mistake context."""
 
     client = _get_client()
     model_name = _read_env("QWEN_TEXT_MODEL", "qwen-max")
@@ -413,9 +444,8 @@ def analyze_student_profile(context: Dict[str, Any]) -> Dict[str, Any]:
         {
             "role": "system",
             "content": (
-                "你是一名资深教研员，需要基于学生档案与错题列表给出诊断。"
-                "请严格输出 JSON，对象需包含 overall_summary（字符串）、knowledge_focus（数组）、"
-                "teaching_advice（数组）以及 root_causes（数组）。"
+                "You are a senior curriculum specialist. Based on the student profile and mistake list, provide a diagnosis."
+                "Return strictly in JSON with overall_summary (string), knowledge_focus (array), teaching_advice (array), and root_causes (array)."
             ),
         },
         {
@@ -431,7 +461,7 @@ def analyze_student_profile(context: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     if not response.choices:
-        raise LLMInvocationError("大模型未返回任何内容。")
+        raise LLMInvocationError("LLM did not return any content.")
 
     payload = _parse_json_payload(response.choices[0].message.content or "")
     return {
@@ -444,16 +474,16 @@ def analyze_student_profile(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 TEACHER_ASSISTANT_PROMPT = (
-    "你是一名资深教研顾问，擅长将大模型能力转化为教学计划、讲评策略和家校沟通脚本。"
-    "与教师对话时，请基于提供的上下文给出务实、可执行的建议。"
-    "回答时必须严格使用以下格式：\n"
+    "You are an instructional coach who translates large-model insights into teaching plans, review strategies, and home-school communication."
+    "When talking to teachers, keep the advice grounded in the provided context and make it practical."
+    "Format the reply exactly as:\n"
     "<answer>\n"
-    "主要回复内容，聚焦可执行的教学建议。\n"
+    "Primary response focused on executable teaching suggestions.\n"
     "</answer>\n"
     "<suggestions>\n"
-    "- 后续追问或跟进的灵感要点，每行一个。\n"
+    "- Follow-up questions or next-step prompts, one per line.\n"
     "</suggestions>\n"
-    "所有输出均需使用简体中文。"
+    "Respond in Simplified Chinese."
 )
 
 
@@ -495,7 +525,7 @@ def _prepare_assistant_messages(messages: List[Dict[str, str]]) -> List[Dict[str
         cleaned.append({"role": role, "content": content})
 
     if not cleaned:
-        raise LLMInvocationError("缺少有效内容，无法生成答案。")
+        raise LLMInvocationError("No valid content provided; cannot build a reply.")
 
     chat_messages: List[Dict[str, str]] = [
         {"role": "system", "content": TEACHER_ASSISTANT_PROMPT},
@@ -612,7 +642,7 @@ def stream_teacher_assistant(
 
     answer, suggestions = _extract_answer_and_suggestions(raw_content)
     if not answer:
-        yield _format_sse_event("error", {"message": "大模型未返回有效回答。"})
+        yield _format_sse_event("error", {"message": "LLM did not return a usable answer."})
         yield _format_sse_event("done", {})
         return
 
@@ -651,12 +681,12 @@ def run_teacher_assistant(
     response = client.chat.completions.create(**params)
 
     if not response.choices:
-        raise LLMInvocationError("大模型未返回回答。")
+        raise LLMInvocationError("LLM did not return an answer.")
 
     content = response.choices[0].message.content or ""
     answer, suggestions = _extract_answer_and_suggestions(content)
     if not answer:
-        raise LLMInvocationError("大模型未返回有效回答。")
+        raise LLMInvocationError("LLM did not return a valid answer.")
 
     return answer, suggestions
 
@@ -666,5 +696,6 @@ def llm_available() -> bool:
         return True
     except LLMNotConfiguredError:
         return False
+
 
 

@@ -11,6 +11,27 @@ export const clearAllData = async () => {
     const { data } = await apiClient.post("/bootstrap/clear");
     return data;
 };
+export const registerUser = async (payload) => {
+    const { data } = await apiClient.post("/auth/register", payload);
+    return data;
+};
+export const loginUser = async (payload) => {
+    const params = new URLSearchParams();
+    params.append("username", payload.email);
+    params.append("password", payload.password);
+    params.append("grant_type", "password");
+    params.append("scope", "");
+    params.append("client_id", "");
+    params.append("client_secret", "");
+    const { data } = await apiClient.post("/auth/token", params, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    return data;
+};
+export const fetchCurrentUser = async () => {
+    const { data } = await apiClient.get("/auth/me");
+    return data;
+};
 export const fetchTeachers = async () => {
     const { data } = await apiClient.get("/teachers");
     return data;
