@@ -3,14 +3,15 @@ import {
   Breadcrumb,
   Button,
   Layout,
-  Result,
   Space,
   Spin,
   Steps,
+  Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
-import { useEffect, useMemo, useRef, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { WizardStep } from "./WizardProvider";
 import { useWizardStore } from "./useWizardStore";
@@ -26,10 +27,10 @@ const { Title, Text } = Typography;
 
 const WIZARD_STEPS = [
   { key: 1, title: "试卷配置", description: "选择或新建试卷", breadcrumb: "试卷选择" },
-  { key: 2, title: "标准答案校对", description: "逐题核对标准答案", breadcrumb: "答案校验" },
-  { key: 3, title: "学生试卷上传", description: "批量上传学生卷面", breadcrumb: "上传试卷" },
+  { key: 2, title: "标准答案校对", description: "逐题确认标准答案", breadcrumb: "答案校对" },
+  { key: 3, title: "学生卷面上传", description: "批量上传并识别卷面", breadcrumb: "卷面上传" },
   { key: 4, title: "AI 批改确认", description: "复核 AI 批改结果", breadcrumb: "批改确认" },
-  { key: 5, title: "完成与导出", description: "导出报告或派送练习", breadcrumb: "完成导出" },
+  { key: 5, title: "完成与导出", description: "导出成果并安排练习", breadcrumb: "完成导出" },
 ] as const;
 
 const GradingWizard = () => {
@@ -38,10 +39,11 @@ const GradingWizard = () => {
   const { isMobile, isTablet } = useResponsive();
   const isCompact = isMobile || isTablet;
   const {
-    state: { initializing, step, error },
+    state: { initializing, step, error, progress, blocking, savingStep },
     actions: { initialize, clearError, goToStep },
   } = useWizardStore();
   const lastSyncedQueryStep = useRef<number | null>(null);
+
   const requestedStep = useMemo(() => {
     const params = new URLSearchParams(location.search);
     const raw = Number(params.get("step"));
@@ -68,7 +70,12 @@ const GradingWizard = () => {
       return;
     }
     lastSyncedQueryStep.current = requestedStep;
-    void goToStep(requestedStep as WizardStep);
+    void goToStep(requestedStep as WizardStep).catch((err) => {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        (err instanceof Error ? err.message : "无法跳转至指定步骤");
+      message.error(detail);
+    });
   }, [initializing, requestedStep, step, goToStep]);
 
   useEffect(() => {
@@ -97,22 +104,79 @@ const GradingWizard = () => {
     [step],
   );
 
+  const blockingReasons = useMemo(() => blocking[step] ?? [], [blocking, step]);
+  const primaryBlockingAction = useMemo(
+    () => blockingReasons.find((reason) => reason.action)?.action,
+    [blockingReasons],
+  );
+
+  const progressBadges = useMemo(
+    () =>
+      [
+        { key: "answers", label: "答案校对", segment: progress.answers },
+        { key: "uploads", label: "卷面上传", segment: progress.uploads },
+        { key: "review", label: "批改确认", segment: progress.review },
+      ].map(({ key, label, segment }) => {
+        const total = segment.total ?? 0;
+        const confirmed = segment.confirmed ?? 0;
+        const pending = segment.pending ?? 0;
+        const color = segment.ready
+          ? "green"
+          : total === 0 && confirmed === 0
+          ? "default"
+          : "orange";
+
+        let text: string;
+        if (key === "uploads") {
+          text = confirmed > 0 ? `${confirmed} 份` : "待上传";
+        } else if (key === "review") {
+          text = segment.ready
+            ? "全部确认"
+            : pending > 0
+            ? `${pending} 待确认`
+            : confirmed > 0
+            ? `${confirmed} 已确认`
+            : "待开始";
+        } else {
+          text = segment.ready
+            ? "已完成"
+            : total > 0
+            ? `${confirmed}/${total}`
+            : confirmed > 0
+            ? `${confirmed} 已确认`
+            : "待开始";
+        }
+
+        const updatedHint = segment.updatedAt ? `，最近更新 ${segment.updatedAt}` : "";
+        const tooltip =
+          key === "uploads"
+            ? `已处理 ${confirmed} 份卷面${updatedHint}`
+            : key === "review"
+            ? `待确认 ${pending}，已确认 ${confirmed}${updatedHint}`
+            : `已确认 ${confirmed}${total > 0 ? ` / ${total}` : ""}${updatedHint}`;
+
+        return { key, label, color, text, tooltip };
+      }),
+    [progress],
+  );
+
+  const resolveTransitionError = (err: unknown, fallback: string) =>
+    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+    (err instanceof Error ? err.message : fallback);
+
   const handleStepChange = useCallback(
     (targetIndex: number) => {
       const targetStep = (targetIndex + 1) as WizardStep;
-      if (targetStep === step) return;
+      if (savingStep || targetStep === step) return;
       if (targetStep > step) {
-        message.warning("请按流程顺序完成各阶段");
+        message.warning("请按流程顺序完成前置步骤");
         return;
       }
       void goToStep(targetStep).catch((error) => {
-        const detail =
-          (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-          (error instanceof Error ? error.message : "跳转步骤失败");
-        message.error(detail);
+        message.error(resolveTransitionError(error, "跳转步骤失败"));
       });
     },
-    [step, goToStep],
+    [step, goToStep, savingStep],
   );
 
   const stepItems = useMemo(
@@ -139,11 +203,9 @@ const GradingWizard = () => {
         return <StepCompletion />;
       default:
         return (
-          <Result
-            status="info"
-            title="该步骤的前端界面还在构建中"
-            subTitle="当前版本已完成试卷配置向导，后续步骤将陆续上线。"
-          />
+          <Space direction="vertical" size={12} align="center" style={{ width: "100%" }}>
+            <Text type="secondary">该步骤尚未实现，后续版本将持续完善。</Text>
+          </Space>
         );
     }
   };
@@ -166,32 +228,92 @@ const GradingWizard = () => {
             <Title level={isCompact ? 5 : 4} style={{ margin: 0 }}>
               批改流程向导
             </Title>
-            <Text type="secondary">从试卷配置到导出，一站式完成批改闭环</Text>
+            <Text type="secondary">从试卷准备到成果导出，逐步完成教学批改工作</Text>
           </div>
         </Space>
         <Button type="text" onClick={() => navigate("/dashboard")} block={isCompact}>
-          閫€鍑哄悜瀵?
+          返回总览
         </Button>
       </Header>
-      <Content style={{ padding: isCompact ? "24px 16px" : "32px 48px", background: "linear-gradient(180deg,#f8fafc 0%,#ffffff 100%)" }}>
+      <Content
+        style={{
+          padding: isCompact ? "24px 16px" : "32px 48px",
+          background: "linear-gradient(180deg,#f8fafc 0%,#ffffff 100%)",
+        }}
+      >
         <Space direction="vertical" size={isCompact ? 20 : 24} style={{ width: "100%" }}>
           <Breadcrumb items={breadcrumbItems} />
-          <Steps current={step - 1} items={stepItems} responsive onChange={handleStepChange} direction={isCompact ? "vertical" : "horizontal"} size={isCompact ? "small" : "default"} />
-          {error && (
+          <Steps
+            current={step - 1}
+            items={stepItems}
+            responsive
+            onChange={handleStepChange}
+            direction={isCompact ? "vertical" : "horizontal"}
+            size={isCompact ? "small" : "default"}
+          />
+          {progressBadges.length > 0 && (
+            <Space size={8} wrap>
+              {progressBadges.map((item) => (
+                <Tooltip key={item.key} title={item.tooltip}>
+                  <Tag color={item.color}>{`${item.label}：${item.text}`}</Tag>
+                </Tooltip>
+              ))}
+            </Space>
+          )}
+          {blockingReasons.length > 0 && (
             <Alert
-              type="error"
-              message={error}
-              closable
-              onClose={clearError}
+              type="warning"
               showIcon
+              message="流程提示"
+              description={
+                <Space direction="vertical" size={4}>
+                  {blockingReasons.map((reason) => (
+                    <span key={reason.code}>{reason.message}</span>
+                  ))}
+                </Space>
+              }
+              action={
+                primaryBlockingAction ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={savingStep}
+                    onClick={() => {
+                      void goToStep(primaryBlockingAction.step).catch((err) => {
+                        message.error(resolveTransitionError(err, "无法跳转至推荐步骤"));
+                      });
+                    }}
+                  >
+                    {primaryBlockingAction.label}
+                  </Button>
+                ) : undefined
+              }
             />
           )}
-          <div style={{ minHeight: 420, background: "#fff", borderRadius: 20, padding: isCompact ? 20 : 32, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }}>
+          {error && (
+            <Alert type="error" message={error} closable onClose={clearError} showIcon />
+          )}
+          <div
+            style={{
+              minHeight: 420,
+              background: "#fff",
+              borderRadius: 20,
+              padding: isCompact ? 20 : 32,
+              boxShadow: "0 24px 60px rgba(15,23,42,0.06)",
+            }}
+          >
             {initializing ? (
-              <div style={{ display: "flex", height: 356, alignItems: "center", justifyContent: "center" }}>
+              <div
+                style={{
+                  display: "flex",
+                  height: 356,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
                 <Space direction="vertical" align="center">
                   <Spin size="large" />
-                  <Text type="secondary">正在加载批改向导，请稍候…</Text>
+                  <Text type="secondary">正在加载批改向导，请稍候</Text>
                 </Space>
               </div>
             ) : (

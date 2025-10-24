@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from .models import (
     AnswerStatus,
@@ -165,6 +165,7 @@ class ExamBase(BaseModel):
     classroom_id: Optional[int] = None
     source_image_path: Optional[str] = None
     parsed_outline: Optional[Dict] = None
+    extra_metadata: Optional[Dict] = None
 
 
 class ExamCreate(ExamBase):
@@ -178,6 +179,14 @@ class ExamRead(ExamBase):
 
     class Config:
         from_attributes = True
+
+
+class ExamSettingsUpdate(BaseModel):
+    answer_mode: Optional[str] = Field(
+        default=None,
+        pattern="^(strict|smart)$",
+        description="strict 表示严格匹配，smart 表示智能参考",
+    )
 
 
 class ExamDraftResponse(BaseModel):
@@ -219,9 +228,42 @@ class ResponseRead(BaseModel):
     review_status: Optional[ResponseReviewStatus] = ResponseReviewStatus.pending
     teacher_comment: Optional[str] = None
     ai_raw: Optional[Dict] = None
+    extra_metadata: Optional[Dict[str, Any]] = None
+    match_strategy: Optional[str] = None
+    suspicious_matches: Optional[List[Dict[str, Any]]] = None
+    blocked_supplement: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_metadata(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            meta = values.get("extra_metadata")
+            if isinstance(meta, dict):
+                values.setdefault("match_strategy", meta.get("matchStrategy"))
+                values.setdefault("suspicious_matches", meta.get("suspiciousMatches"))
+                values.setdefault("blocked_supplement", meta.get("blockedSupplement"))
+        return values
 
     class Config:
         from_attributes = True
+
+
+class ResponseBulkConfirmRequest(BaseModel):
+    response_ids: Optional[List[int]] = None
+    status: Optional[List[ResponseReviewStatus]] = None
+    target_status: ResponseReviewStatus = ResponseReviewStatus.confirmed
+
+    @model_validator(mode="after")
+    def _ensure_filters(self) -> "ResponseBulkConfirmRequest":
+        if not self.response_ids and not self.status:
+            raise ValueError("response ids or status filters required")
+        return self
+
+
+class ResponseBulkConfirmResult(BaseModel):
+    message: str
+    updated_count: int
+    submission: "SubmissionDetail"
 
 
 class SubmissionDetail(SubmissionRead):

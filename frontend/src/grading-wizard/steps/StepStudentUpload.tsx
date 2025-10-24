@@ -1,4 +1,4 @@
-﻿import {
+import {
   Alert,
   Button,
   Card,
@@ -15,10 +15,10 @@
   message,
 } from "antd";
 import type { UploadProps, RcFile } from "antd/es/upload/interface";
-import { InboxOutlined, LoadingOutlined, UploadOutlined } from "@ant-design/icons";
+import { InboxOutlined, LoadingOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchStudents, uploadSubmission } from "../../api/services";
+import { fetchStudents, fetchSubmissions, uploadSubmission } from "../../api/services";
 import type { Student, SubmissionProcessingResult } from "../../types";
 import { useWizardStore } from "../useWizardStore";
 
@@ -44,6 +44,26 @@ const StepStudentUpload = () => {
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<number | undefined>(undefined);
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [uploadSummary, setUploadSummary] = useState({ total: 0, completed: 0, pending: 0 });
+
+  const refreshUploadSummary = useCallback(async () => {
+    if (!selectedExamId) {
+      setUploadSummary({ total: 0, completed: 0, pending: 0 });
+      return null;
+    }
+    try {
+      const submissions = await fetchSubmissions({ exam_id: selectedExamId });
+      const total = submissions.length;
+      const completed = submissions.filter((item) => item.status === "graded").length;
+      const pending = Math.max(total - completed, 0);
+      const summary = { total, completed, pending };
+      setUploadSummary(summary);
+      return summary;
+    } catch (error) {
+      console.error("无法刷新上传进度", error);
+      return null;
+    }
+  }, [selectedExamId]);
 
   const loadStudents = useCallback(async () => {
     setStudentsLoading(true);
@@ -67,6 +87,58 @@ const StepStudentUpload = () => {
   useEffect(() => {
     void loadStudents();
   }, [loadStudents]);
+
+  useEffect(() => {
+    void refreshUploadSummary();
+  }, [refreshUploadSummary]);
+
+  useEffect(() => {
+    if (!session || !selectedExamId) {
+      return;
+    }
+    const { total, completed, pending } = uploadSummary;
+    if (total === 0 && completed === 0 && pending === 0) {
+      return;
+    }
+    const payloadRoot = (session.payload ?? {}) as Record<string, unknown>;
+    const wizardProgress =
+      payloadRoot.wizardProgress && typeof payloadRoot.wizardProgress === "object"
+        ? (payloadRoot.wizardProgress as Record<string, unknown>)
+        : {};
+    const uploadsSegment =
+      wizardProgress.uploads && typeof wizardProgress.uploads === "object"
+        ? (wizardProgress.uploads as Record<string, unknown>)
+        : {};
+    const toNum = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value)
+        ? value
+        : Number.isFinite(Number(value))
+        ? Number(value)
+        : undefined;
+    const same =
+      toNum(uploadsSegment.total) === total &&
+      (toNum(uploadsSegment.completed) ??
+        toNum((uploadsSegment as Record<string, unknown>).confirmed)) === completed &&
+      toNum(uploadsSegment.pending) === pending;
+    if (same) {
+      return;
+    }
+    void goToStep(3, {
+      examId: selectedExamId,
+      payload: {
+        wizardProgress: {
+          uploads: {
+            total,
+            completed,
+            pending,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+    }).catch((error) => {
+      console.error("无法同步上传进度", error);
+    });
+  }, [session, selectedExamId, uploadSummary, goToStep]);
 
   const selectedStudent = useMemo(
     () => students.find((item) => item.id === selectedStudentId),
@@ -106,6 +178,7 @@ const StepStudentUpload = () => {
         prev.map((item) => (item.id === queueId ? { ...item, status: "completed", result } : item)),
       );
       message.success(`${file.name} 已加入批改队列`);
+      void refreshUploadSummary();
     } catch (error) {
       const detail = (
         (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
@@ -127,17 +200,45 @@ const StepStudentUpload = () => {
     showUploadList: false,
   };
 
-  const completedCount = queue.filter((item) => item.status === "completed").length;
+  const queueProcessingCount = queue.filter((item) => item.status === "processing").length;
 
   const handleProceed = async () => {
-    if (!selectedExamId) return;
+    if (!selectedExamId) {
+      return;
+    }
+    if (queueProcessingCount > 0) {
+      message.info(`仍有 ${queueProcessingCount} 份处理中，请稍候`);
+      return;
+    }
+    if (uploadSummary.total === 0) {
+      message.warning("请至少上传一份学生卷面后再继续");
+      return;
+    }
+    if (uploadSummary.pending > 0) {
+      message.warning(`仍有 ${uploadSummary.pending} 份卷面待批改完成`);
+      return;
+    }
+
     try {
-      await goToStep(4, { examId: selectedExamId });
-      message.success("学生卷面已上传，进入批改确认阶段");
+      const now = new Date().toISOString();
+      await goToStep(4, {
+        examId: selectedExamId,
+        payload: {
+          wizardProgress: {
+            uploads: {
+              total: uploadSummary.total,
+              completed: uploadSummary.completed,
+              pending: uploadSummary.pending,
+              updatedAt: now,
+            },
+          },
+        },
+      });
+      message.success("上传工作已完成，进入 AI 批改确认阶段");
     } catch (error) {
       const detail = (
         (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (error instanceof Error ? error.message : "无法进入下一步")
+        (error instanceof Error ? error.message : "无法进入下一阶段")
       );
       message.error(detail);
     }
@@ -162,6 +263,8 @@ const StepStudentUpload = () => {
         </Title>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
           支持拖拽或批量上传，系统会自动识别题号并给出置信度；若识别度低，可在下一阶段人工确认。
+          <br />
+          当前已上传 {uploadSummary.total} 份卷面，其中 {uploadSummary.completed} 份已完成批改。
         </Paragraph>
       </Space>
 
@@ -175,7 +278,9 @@ const StepStudentUpload = () => {
           >
             <Space direction="vertical" size={20} style={{ width: "100%" }}>
               <div>
-                <Text strong style={{ marginBottom: 8, display: "block" }}>选择学生</Text>
+                <Text strong style={{ marginBottom: 8, display: "block" }}>
+                  选择学生
+                </Text>
                 <Spin spinning={studentsLoading} indicator={<LoadingOutlined spin />}>
                   <Select
                     showSearch
@@ -213,13 +318,14 @@ const StepStudentUpload = () => {
             bordered={false}
             style={{ borderRadius: 18, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }}
             bodyStyle={{ padding: 24 }}
-            extra={<Tag color={completedCount > 0 ? "green" : "orange"}>已完成 {completedCount}</Tag>}
+            extra={
+              <Tag color={uploadSummary.total > 0 ? "green" : "orange"}>
+                已上传 {uploadSummary.total} 份 · 完成 {uploadSummary.completed} 份
+              </Tag>
+            }
           >
             {queue.length === 0 ? (
-              <Empty
-                description="队列为空，等待上传"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+              <Empty description="队列为空，等待上传" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
               <List
                 dataSource={queue}
@@ -235,7 +341,9 @@ const StepStudentUpload = () => {
                         {item.status === "error" && <Tag color="red">失败</Tag>}
                       </Space>
                       {item.result?.matching_score !== undefined && (
-                        <Text type="secondary">匹配度：{Math.round((item.result.matching_score ?? 0) * 100)}%</Text>
+                        <Text type="secondary">
+                          匹配度：{Math.round((item.result.matching_score ?? 0) * 100)}%
+                        </Text>
                       )}
                       {item.error && <Text type="danger">{item.error}</Text>}
                     </Space>
@@ -244,13 +352,12 @@ const StepStudentUpload = () => {
               />
             )}
             <Space style={{ marginTop: 16 }}>
-              <Button
-                type="primary"
-                disabled={completedCount === 0}
-                onClick={handleProceed}
-              >
-                所有队列完成，前往AI批改确认
+              <Button type="primary" disabled={uploadSummary.total === 0} onClick={handleProceed}>
+                所有卷面已处理，前往 AI 批改确认
               </Button>
+              {queueProcessingCount > 0 && (
+                <Text type="secondary">仍有 {queueProcessingCount} 份处理中，请稍候</Text>
+              )}
             </Space>
           </Card>
         </Col>

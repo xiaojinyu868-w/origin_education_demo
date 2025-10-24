@@ -60,12 +60,16 @@ def apply_lightweight_migrations() -> None:
             connection.exec_driver_sql("ALTER TABLE response ADD COLUMN teacher_comment TEXT")
         if "ai_raw" not in response_columns:
             connection.exec_driver_sql("ALTER TABLE response ADD COLUMN ai_raw JSON")
+        if "response_extra_metadata" not in response_columns:
+            connection.exec_driver_sql("ALTER TABLE response ADD COLUMN response_extra_metadata JSON")
 
         exam_columns = _column_names("exam")
         if "source_image_path" not in exam_columns:
             connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN source_image_path TEXT")
         if "parsed_outline" not in exam_columns:
             connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN parsed_outline JSON")
+        if "exam_extra_metadata" not in exam_columns:
+            connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN exam_extra_metadata JSON")
         if "owner_id" not in exam_columns:
             connection.exec_driver_sql("ALTER TABLE exam ADD COLUMN owner_id INTEGER")
 

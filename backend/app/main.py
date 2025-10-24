@@ -3,10 +3,10 @@
 import mimetypes
 import shutil
 from pathlib import Path
-from datetime import datetime
-from typing import Iterator, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, Iterator, List, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 from .database import engine, get_session, init_db, reset_database
 from .sample_data import ensure_demo_dataset, create_demo_dataset_for_user
 from .models import (
+    AnswerStatus,
     ClassEnrollment,
     Classroom,
     Exam,
@@ -25,6 +26,7 @@ from .models import (
     PracticeAssignment,
     PracticeStatus,
     Question,
+    ResponseReviewStatus,
     SessionStatus,
     StudentProfile,
     SubmissionStatus,
@@ -50,6 +52,7 @@ from .schemas import (
     ExamCreate,
     ExamRead,
     ExamAnswerKeyUpdate,
+    ExamSettingsUpdate,
     ExamDraftResponse,
     GradingSessionCreate,
     GradingSessionRead,
@@ -72,6 +75,8 @@ from .schemas import (
     PracticeAssignmentCreate,
     PracticeAssignmentRead,
     PracticeCompletionUpdate,
+    ResponseBulkConfirmRequest,
+    ResponseBulkConfirmResult,
     ResponseRead,
     StudentCreate,
     StudentRead,
@@ -109,6 +114,7 @@ from .services.student_analysis import (
     list_analysis_history,
     perform_student_analysis,
 )
+from .services.question_utils import normalize_question_label
 from .security import (
     authenticate_user,
     create_access_token,
@@ -206,6 +212,8 @@ def _list_student_mistakes(
     *,
     knowledge_tag: Optional[str] = None,
     status: Optional[str] = None,
+    limit: Optional[int] = None,
+    recent_days: Optional[int] = None,
 ) -> List[MistakeRead]:
     _require_student(session, student_id, current_user)
     ensure_student_profile(session, student_id)
@@ -228,6 +236,17 @@ def _list_student_mistakes(
 
     if status:
         mistakes = [item for item in mistakes if item.data_status == status]
+
+    if recent_days:
+        cutoff = datetime.utcnow() - timedelta(days=recent_days)
+        mistakes = [
+            item
+            for item in mistakes
+            if item.last_seen_at is not None and item.last_seen_at >= cutoff
+        ]
+
+    if limit:
+        mistakes = mistakes[:limit]
 
     return [MistakeRead.model_validate(item) for item in mistakes]
 
@@ -483,11 +502,21 @@ def create_exam(
     if payload.classroom_id is not None:
         _require_classroom(session, payload.classroom_id, current_user)
     exam = Exam(**payload.model_dump(exclude={"questions"}), owner_id=current_user.id)
+    exam_meta = exam.extra_metadata or {}
+    if "answerMode" not in exam_meta:
+        exam_meta["answerMode"] = "strict"
+    exam.extra_metadata = exam_meta
     session.add(exam)
     session.flush()
 
     for question_payload in payload.questions:
-        question = Question(exam_id=exam.id, **question_payload.model_dump())
+        question_data = question_payload.model_dump()
+        extra_metadata = question_data.get("extra_metadata") or {}
+        normalized = extra_metadata.get("normalizedNumber") or normalize_question_label(question_data.get("number"))
+        if normalized:
+            extra_metadata["normalizedNumber"] = normalized
+        question_data["extra_metadata"] = extra_metadata or None
+        question = Question(exam_id=exam.id, **question_data)
         session.add(question)
 
     session.commit()
@@ -557,6 +586,69 @@ def update_exam_answer_key(
         exam.answer_key_version += 1
         session.add(exam)
     session.commit()
+    session.refresh(exam, attribute_names=["questions"])
+    return ExamRead.model_validate(exam)
+
+
+@app.post("/exams/{exam_id}/answers/confirm_all", response_model=ExamRead)
+def confirm_all_exam_answers(
+    exam_id: int,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExamRead:
+    exam = _require_exam(session, exam_id, current_user)
+    session.refresh(exam, attribute_names=["questions"])
+
+    updated = False
+    for question in exam.questions or []:
+        if question.answer_status != AnswerStatus.confirmed:
+            question.answer_status = AnswerStatus.confirmed
+            updated = True
+        if question.answer_confidence != 1.0:
+            question.answer_confidence = 1.0
+            updated = True
+        session.add(question)
+
+    if updated:
+        session.commit()
+        session.refresh(exam, attribute_names=["questions"])
+    return ExamRead.model_validate(exam)
+
+
+@app.patch("/exams/{exam_id}", response_model=ExamRead)
+def update_exam_settings(
+    exam_id: int,
+    payload: ExamSettingsUpdate,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExamRead:
+    exam = _require_exam(session, exam_id, current_user)
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        session.refresh(exam, attribute_names=["questions"])
+        return ExamRead.model_validate(exam)
+
+    meta: Dict[str, Any]
+    if isinstance(exam.extra_metadata, dict):
+        meta = dict(exam.extra_metadata)
+    else:
+        meta = {}
+
+    changed = False
+    answer_mode = updates.get("answer_mode")
+    if answer_mode is not None:
+        if answer_mode not in {"strict", "smart"}:
+            raise HTTPException(status_code=400, detail="答案模式取值无效")
+        if meta.get("answerMode") != answer_mode:
+            meta["answerMode"] = answer_mode
+            changed = True
+
+    if changed:
+        exam.extra_metadata = meta
+        session.add(exam)
+        session.commit()
+
     session.refresh(exam, attribute_names=["questions"])
     return ExamRead.model_validate(exam)
 
@@ -790,6 +882,93 @@ def get_submission(
     return SubmissionDetail.model_validate(submission)
 
 
+@app.post(
+    "/submissions/{submission_id}/responses/bulk_confirm",
+    response_model=ResponseBulkConfirmResult,
+)
+def bulk_confirm_responses(
+    submission_id: int,
+    payload: ResponseBulkConfirmRequest,
+    session: Session = Depends(_get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResponseBulkConfirmResult:
+    submission = _require_submission(session, submission_id, current_user)
+
+    stmt = select(Response).where(Response.submission_id == submission.id)
+    if payload.response_ids:
+        stmt = stmt.where(Response.id.in_(payload.response_ids))
+    if payload.status:
+        stmt = stmt.where(Response.review_status.in_(payload.status))
+
+    responses = session.exec(stmt).all()
+    if not responses:
+        session.refresh(submission, attribute_names=["responses"])
+        return ResponseBulkConfirmResult(
+            message="未找到符合条件的作答记录",
+            updated_count=0,
+            submission=SubmissionDetail.model_validate(submission),
+        )
+
+    target_status = payload.target_status or ResponseReviewStatus.confirmed
+    status_labels = {
+        ResponseReviewStatus.confirmed: "已通过",
+        ResponseReviewStatus.needs_review: "待复核",
+        ResponseReviewStatus.pending: "待处理",
+    }
+    status_label = status_labels.get(target_status, target_status.value)
+
+    updated = 0
+    for response in responses:
+        if response.review_status != target_status:
+            response.review_status = target_status
+            updated += 1
+        metadata = response.extra_metadata or {}
+        metadata.setdefault("matchStrategy", metadata.get("matchStrategy"))
+        response.extra_metadata = metadata or None
+        session.add(response)
+
+    all_responses = session.exec(select(Response).where(Response.submission_id == submission.id)).all()
+    applies = [item for item in all_responses if item.applies_to_student]
+    if applies:
+        if all(item.review_status == ResponseReviewStatus.confirmed for item in applies):
+            submission.status = SubmissionStatus.graded
+        elif any(item.review_status == ResponseReviewStatus.needs_review for item in applies):
+            submission.status = SubmissionStatus.needs_review
+        else:
+            submission.status = SubmissionStatus.pending
+    session.add(submission)
+
+    log_entry = ProcessingLog(
+        submission_id=submission.id,
+        step="教师复核",
+        actor_type="teacher",
+        detail=f"批量将 {len(responses)} 条作答标记为{status_label}",
+        extra={
+            "updated_count": updated,
+            "response_ids": [item.id for item in responses],
+            "status_filters": [status.value for status in payload.status] if payload.status else None,
+            "target_status": target_status.value,
+        },
+    )
+    session.add(log_entry)
+    session.commit()
+
+    session.refresh(submission, attribute_names=["responses"])
+    message_text = (
+        f"已将 {updated} 条作答标记为{status_label}"
+        if updated
+        else f"符合条件的作答均已是{status_label}状态"
+    )
+    return ResponseBulkConfirmResult(
+        message=message_text,
+        updated_count=updated,
+        submission=SubmissionDetail.model_validate(submission),
+    )
+
+
+
+
+
 @app.post("/submissions/upload", response_model=SubmissionProcessingResult)
 async def upload_submission(
     student_id: int = Form(...),
@@ -956,12 +1135,17 @@ def update_manual_score(
 
     response.score = payload.new_score
     response.comments = payload.new_comment
+    if response.question is None:
+        session.refresh(response, attribute_names=["question"])
+    max_score = response.question.max_score if response.question else None
+    if max_score is not None and payload.new_score is not None:
+        response.is_correct = payload.new_score >= max_score - 1e-6
+    else:
+        response.is_correct = bool(payload.new_score and payload.new_score > 0)
     if payload.override_annotation:
         response.teacher_annotation = payload.override_annotation
 
     session.add(response)
-    session.commit()
-    session.refresh(response)
 
     session.refresh(submission, attribute_names=["responses"])
     scored = [
@@ -969,9 +1153,10 @@ def update_manual_score(
         for item in submission.responses
         if item.score is not None and item.applies_to_student
     ]
-    submission.total_score = sum(scored) if scored else submission.total_score
+    submission.total_score = sum(scored) if scored else 0.0
     session.add(submission)
     session.commit()
+    session.refresh(response)
 
     log_entry = ProcessingLog(
         submission_id=response.submission_id,
@@ -995,6 +1180,8 @@ def list_student_mistakes(
     student_id: int,
     knowledge_tag: Optional[str] = None,
     status: Optional[str] = None,
+    limit: Optional[int] = Query(default=None, ge=1, le=100),
+    recent_days: Optional[int] = Query(default=None, ge=1, le=365),
     session: Session = Depends(_get_db),
     current_user: User = Depends(get_current_user),
 ) -> List[MistakeRead]:
@@ -1004,6 +1191,8 @@ def list_student_mistakes(
         current_user,
         knowledge_tag=knowledge_tag,
         status=status,
+        limit=limit,
+        recent_days=recent_days,
     )
 
 
@@ -1053,6 +1242,8 @@ def list_student_mistakes_demo(
     student_id: int,
     knowledge_tag: Optional[str] = None,
     status: Optional[str] = None,
+    limit: Optional[int] = Query(default=None, ge=1, le=100),
+    recent_days: Optional[int] = Query(default=None, ge=1, le=365),
     session: Session = Depends(_get_db),
     current_user: User = Depends(get_current_user),
 ) -> List[MistakeRead]:
@@ -1062,6 +1253,8 @@ def list_student_mistakes_demo(
         current_user,
         knowledge_tag=knowledge_tag,
         status=status,
+        limit=limit,
+        recent_days=recent_days,
     )
 
 

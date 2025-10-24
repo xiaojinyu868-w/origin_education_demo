@@ -5,12 +5,17 @@ import {
   Button,
   Card,
   Col,
+  Checkbox,
   Divider,
+  Empty,
   Input,
   InputNumber,
+  List,
   Modal,
   Row,
+  Select,
   Slider,
+  Skeleton,
   Space,
   Tag,
   Typography,
@@ -19,16 +24,30 @@ import {
 import {
   BulbOutlined,
   FireOutlined,
+  InfoCircleOutlined,
   SendOutlined,
   SettingOutlined,
   SlidersOutlined,
+  StarFilled,
+  StarOutlined,
   ThunderboltOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import PageLayout from "../components/PageLayout";
 import LlmConfigModal from "../components/LlmConfigModal";
-import type { AssistantMessage } from "../types";
-import { fetchAssistantStatus } from "../api/services";
+import type { AssistantMessage, Mistake, Student } from "../types";
+import { fetchAssistantStatus, fetchStudentMistakes, fetchStudents } from "../api/services";
+import {
+  TIME_RANGE_OPTIONS,
+  TimeRangeValue,
+  TOKEN_WARNING_THRESHOLD,
+  buildContextMessage,
+  estimateTokensForMistakes,
+  extractAssistantSections,
+  extractKnowledgeTags,
+  formatDateLabel,
+  sortMistakesByRelevance,
+} from "./TeacherAssistant.utils";
 
 type ChatTuning = {
   temperature: number;
@@ -39,12 +58,6 @@ type ChatTuning = {
 
 const { Paragraph, Text, Title } = Typography;
 const { TextArea } = Input;
-
-const defaultTips: string[] = [
-  "请帮我为函数图像这一节设计一堂40分钟的课堂讲评课，包括分层提问。",
-  "根据最近错误率最高的三个知识点，给出专题小练和课后作业建议。",
-  "生成一次家校沟通话术，主题是提醒家长陪伴错题复盘。",
-];
 
 const defaultTuning: ChatTuning = {
   temperature: 0.3,
@@ -69,6 +82,13 @@ const TeacherAssistant = () => {
   const [tuningVisible, setTuningVisible] = useState(false);
   const [chatTuning, setChatTuning] = useState<ChatTuning>(defaultTuning);
   const [pendingTuning, setPendingTuning] = useState<ChatTuning>(defaultTuning);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [selectedStudentId, setSelectedStudentId] = useState<number | null>(null);
+  const [mistakes, setMistakes] = useState<Mistake[]>([]);
+  const [mistakeLoading, setMistakeLoading] = useState(false);
+  const [timeRange, setTimeRange] = useState<TimeRangeValue>("latest");
+  const [selectedMistakeIds, setSelectedMistakeIds] = useState<Set<number>>(new Set());
+  const [starredMistakeIds, setStarredMistakeIds] = useState<Set<number>>(new Set());
   const streamControllerRef = useRef<AbortController | null>(null);
 
   const refreshLlmStatus = useCallback(async () => {
@@ -87,6 +107,188 @@ const TeacherAssistant = () => {
       streamControllerRef.current?.abort();
     };
   }, [refreshLlmStatus]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await fetchStudents();
+        setStudents(list);
+        if (list.length > 0) {
+          setSelectedStudentId(list[0].id);
+        }
+      } catch (error) {
+        console.error(error);
+        message.error("获取学生列表失败，请稍后再试");
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedStudentId) {
+      setMistakes([]);
+      setSelectedMistakeIds(new Set());
+      setStarredMistakeIds(new Set());
+      return;
+    }
+    const params: { limit: number; recent_days?: number } = { limit: 10 };
+    if (timeRange === "7d") {
+      params.recent_days = 7;
+    }
+
+    setMistakeLoading(true);
+    void (async () => {
+      try {
+        const list = await fetchStudentMistakes(selectedStudentId, params);
+        const sorted = sortMistakesByRelevance(list).slice(0, params.limit);
+        setMistakes(sorted);
+        setSelectedMistakeIds(new Set(sorted.map((item) => item.id)));
+        setStarredMistakeIds(new Set(sorted.slice(0, Math.min(3, sorted.length)).map((item) => item.id)));
+      } catch (error) {
+        console.error(error);
+        message.error("获取错题列表失败，请稍后再试");
+        setMistakes([]);
+        setSelectedMistakeIds(new Set());
+        setStarredMistakeIds(new Set());
+      } finally {
+        setMistakeLoading(false);
+      }
+    })();
+  }, [selectedStudentId, timeRange]);
+
+  const studentsById = useMemo(() => {
+    return new Map(students.map((student) => [student.id, student]));
+  }, [students]);
+
+  const selectedStudent = selectedStudentId ? studentsById.get(selectedStudentId) ?? null : null;
+
+  const displayMistakes = useMemo(() => {
+    const sorted = sortMistakesByRelevance(mistakes);
+    return sorted.sort((a, b) => {
+      const aStar = starredMistakeIds.has(a.id);
+      const bStar = starredMistakeIds.has(b.id);
+      if (aStar === bStar) {
+        return 0;
+      }
+      return aStar ? -1 : 1;
+    });
+  }, [mistakes, starredMistakeIds]);
+
+  const selectedMistakes = useMemo(
+    () => displayMistakes.filter((item) => selectedMistakeIds.has(item.id)),
+    [displayMistakes, selectedMistakeIds],
+  );
+
+  const knowledgeCoverage = useMemo(() => {
+    const set = new Set<string>();
+    selectedMistakes.forEach((item) => {
+      extractKnowledgeTags(item.knowledge_tags).forEach((tag) => set.add(tag));
+    });
+    return set;
+  }, [selectedMistakes]);
+
+  const tokenEstimate = useMemo(
+    () => estimateTokensForMistakes(selectedMistakes),
+    [selectedMistakes],
+  );
+  const tokenOverLimit = tokenEstimate > TOKEN_WARNING_THRESHOLD;
+
+  const contextPreview = useMemo(
+    () => buildContextMessage(selectedStudent?.name, selectedMistakes),
+    [selectedStudent, selectedMistakes],
+  );
+
+  const contextPreviewSnippet = useMemo(() => {
+    if (!contextPreview) {
+      return "";
+    }
+    const lines = contextPreview.split("\n");
+    if (lines.length <= 4) {
+      return contextPreview;
+    }
+    return `${lines.slice(0, 4).join("\n")}\n...`;
+  }, [contextPreview]);
+
+  const toggleMistakeSelection = (mistakeId: number) => {
+    setSelectedMistakeIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(mistakeId)) {
+        next.delete(mistakeId);
+      } else {
+        next.add(mistakeId);
+      }
+      return next;
+    });
+  };
+
+  const toggleStarMistake = (mistakeId: number) => {
+    setStarredMistakeIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(mistakeId)) {
+        next.delete(mistakeId);
+      } else {
+        next.add(mistakeId);
+      }
+      return next;
+    });
+    setSelectedMistakeIds((previous) => {
+      if (previous.has(mistakeId)) {
+        return previous;
+      }
+      const next = new Set(previous);
+      next.add(mistakeId);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    setSelectedMistakeIds(new Set(displayMistakes.map((item) => item.id)));
+  };
+
+  const handleClearSelection = () => {
+    setSelectedMistakeIds(new Set());
+  };
+
+  const handleTrimToStarred = () => {
+    if (starredMistakeIds.size > 0) {
+      setSelectedMistakeIds(new Set(starredMistakeIds));
+      message.success("已保留关键错题作为上下文");
+      return;
+    }
+    if (displayMistakes.length === 0) {
+      return;
+    }
+    const fallback = displayMistakes.slice(0, Math.min(5, displayMistakes.length)).map((item) => item.id);
+    setSelectedMistakeIds(new Set(fallback));
+    message.info("已精简至前 5 条错题");
+  };
+
+  const summaryTags = useMemo(() => {
+    return [
+      { label: `已选 ${selectedMistakes.length} 题`, color: "processing" as const },
+      { label: `知识点 ${knowledgeCoverage.size}`, color: "geekblue" as const },
+      { label: `≈ ${tokenEstimate} tokens`, color: tokenOverLimit ? "volcano" : "success" as const },
+    ];
+  }, [knowledgeCoverage.size, selectedMistakes.length, tokenEstimate, tokenOverLimit]);
+
+  const renderAssistantContent = useCallback(
+    (content: string) => {
+      const sections = extractAssistantSections(content);
+      if (!sections) {
+        return <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{content}</Paragraph>;
+      }
+      return (
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          {sections.map((section, index) => (
+            <Space key={`${section.title}-${index}`} direction="vertical" size={4} style={{ width: "100%" }}>
+              <Text strong>{`【${section.title}】`}</Text>
+              <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{section.body}</Paragraph>
+            </Space>
+          ))}
+        </Space>
+      );
+    },
+    [],
+  );
 
   const handleTuningChange = (field: keyof ChatTuning) => (value: number | null) => {
     if (typeof value !== "number" || Number.isNaN(value)) {
@@ -141,11 +343,28 @@ const TeacherAssistant = () => {
       return;
     }
 
+    if (!selectedStudent) {
+      message.warning("请先选择学生");
+      return;
+    }
+
+    if (selectedMistakes.length === 0) {
+      message.warning("请至少勾选一条错题作为上下文");
+      return;
+    }
+
     stopStreaming();
 
     const userMessage: AssistantMessage = { role: "user", content: prompt };
-    const baseHistory = [...chatHistory, userMessage];
-    setChatHistory([...baseHistory]);
+    const historyBeforeSend = [...chatHistory];
+    const requestMessages: AssistantMessage[] = [...historyBeforeSend];
+    const contextMessage = buildContextMessage(selectedStudent.name, selectedMistakes);
+    if (contextMessage) {
+      requestMessages.push({ role: "user", content: contextMessage });
+    }
+    requestMessages.push(userMessage);
+
+    setChatHistory([...historyBeforeSend, userMessage]);
     appendAssistantMessage("");
     setInput("");
     setSuggestions([]);
@@ -159,7 +378,7 @@ const TeacherAssistant = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: baseHistory,
+          messages: requestMessages,
           temperature: chatTuning.temperature,
           top_p: chatTuning.top_p,
           presence_penalty: chatTuning.presence_penalty,
@@ -305,18 +524,21 @@ const TeacherAssistant = () => {
     () => [
       {
         icon: <BulbOutlined />,
-        label: "讲评提纲",
-        prompt: "请帮我根据错题生成一份课堂讲评提纲，包含导入、重难点拆解和课堂互动。",
+        label: "共性分析",
+        prompt:
+          "请结合上述错题上下文，先总结共性诊断与典型错误，再点出最容易被忽视的知识盲点，并按照【共性诊断】【课堂策略】【家校建议】输出。",
       },
       {
         icon: <ThunderboltOutlined />,
-        label: "作业建议",
-        prompt: "结合最近的批改结果，推荐一份分层作业方案，区分基础巩固与拔高拓展。",
+        label: "课堂讲评",
+        prompt:
+          "请基于错题上下文，设计一份40分钟的课堂讲评方案，包含导入、分层互动与当堂检测，最终以【共性诊断】【课堂策略】【家校建议】格式呈现。",
       },
       {
         icon: <FireOutlined />,
         label: "家校沟通",
-        prompt: "为家长写一段错题巩固提醒，包含错题整理、复盘引导与陪伴建议。",
+        prompt:
+          "请根据错题上下文，为家长撰写沟通建议，说明需要关注的知识点与陪伴方式，最后按照【共性诊断】【课堂策略】【家校建议】结构输出。",
       },
     ],
     [],
@@ -391,6 +613,152 @@ const TeacherAssistant = () => {
         </Space>
       </Card>
 
+      <Card bordered={false} className="shadow-panel" bodyStyle={{ padding: 24 }}>
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Space
+            align="center"
+            style={{ width: "100%", justifyContent: "space-between" }}
+            wrap
+          >
+            <Space size={12} wrap align="center">
+              <Select
+                placeholder="选择学生"
+                value={selectedStudentId ?? undefined}
+                onChange={(value) => {
+                  if (value === undefined || value === null) {
+                    setSelectedStudentId(null);
+                    return;
+                  }
+                  setSelectedStudentId(Number(value));
+                }}
+                options={students.map((student) => ({ label: student.name, value: student.id }))}
+                style={{ minWidth: 200 }}
+                loading={students.length === 0}
+              />
+              <Select
+                value={timeRange}
+                onChange={(value) => setTimeRange(value as TimeRangeValue)}
+                options={TIME_RANGE_OPTIONS.map((item) => ({ label: item.label, value: item.value }))}
+                style={{ width: 140 }}
+              />
+            </Space>
+            <Space size={8}>
+              <Button type="link" onClick={handleSelectAll} disabled={displayMistakes.length === 0}>
+                全选
+              </Button>
+              <Button type="link" onClick={handleClearSelection} disabled={selectedMistakes.length === 0}>
+                清空
+              </Button>
+              <Button type="link" onClick={handleTrimToStarred} disabled={displayMistakes.length === 0}>
+                精简至关键
+              </Button>
+            </Space>
+          </Space>
+
+          <Space size={8} wrap align="center">
+            {summaryTags.map((item) => (
+              <Tag key={item.label} color={item.color}>
+                {item.label}
+              </Tag>
+            ))}
+            {tokenOverLimit && <Text type="danger">已超过建议的 3200 tokens，建议精简上下文</Text>}
+            {selectedMistakes.length === 0 && (
+              <Text type="secondary">请选择至少一条错题，助手才会拼接上下文</Text>
+            )}
+          </Space>
+
+          {contextPreviewSnippet ? (
+            <Card size="small" bordered={false} style={{ background: "#f8fafc" }}>
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                <Space align="center" size={6}>
+                  <InfoCircleOutlined style={{ color: "#2563eb" }} />
+                  <Text type="secondary">上下文预览（发送时自动拼接）</Text>
+                </Space>
+                <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }} type="secondary">
+                  {contextPreviewSnippet}
+                </Paragraph>
+              </Space>
+            </Card>
+          ) : null}
+
+          {mistakeLoading ? (
+            <Skeleton active paragraph={{ rows: 4 }} />
+          ) : displayMistakes.length === 0 ? (
+            <Empty
+              description={selectedStudent ? "暂无符合条件的错题" : "请选择学生后查看错题上下文"}
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          ) : (
+            <List
+              itemLayout="vertical"
+              dataSource={displayMistakes}
+              split={false}
+              rowKey={(item) => item.id}
+              renderItem={(item) => {
+                const selected = selectedMistakeIds.has(item.id);
+                const starred = starredMistakeIds.has(item.id);
+                const knowledgeTags = extractKnowledgeTags(item.knowledge_tags);
+                return (
+                  <List.Item style={{ padding: "12px 0" }}>
+                    <Space align="start" style={{ width: "100%" }} size={12}>
+                      <Checkbox checked={selected} onChange={() => toggleMistakeSelection(item.id)} />
+                      <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                        <Space
+                          align="center"
+                          style={{ width: "100%", justifyContent: "space-between" }}
+                          wrap
+                        >
+                          <Space size={8} align="center" wrap>
+                            <Text strong>{`题目 ID ${item.question_id}`}</Text>
+                            {starred && <Tag color="gold">关键</Tag>}
+                          </Space>
+                          <Space size={12} align="center">
+                            <Text type="secondary">最近：{formatDateLabel(item.last_seen_at)}</Text>
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={starred ? <StarFilled style={{ color: "#fbbf24" }} /> : <StarOutlined />}
+                              onClick={() => toggleStarMistake(item.id)}
+                            >
+                              {starred ? "取消关键" : "设为关键"}
+                            </Button>
+                          </Space>
+                        </Space>
+                        <Space size={6} wrap>
+                          {knowledgeTags.length === 0 ? (
+                            <Tag color="default">未标注</Tag>
+                          ) : (
+                            knowledgeTags.map((tag) => (
+                              <Tag key={`${item.id}-${tag}`} color="processing">
+                                {tag}
+                              </Tag>
+                            ))
+                          )}
+                        </Space>
+                        <Space size={12}>
+                          <Text type="secondary">错误次数 {item.error_count}</Text>
+                          <Text type="secondary">练习次数 {item.times_practiced}</Text>
+                        </Space>
+                        {item.root_cause && (
+                          <Paragraph style={{ marginBottom: 0 }} type="secondary">
+                            根因：{item.root_cause}
+                          </Paragraph>
+                        )}
+                        {item.resolution_notes && (
+                          <Paragraph style={{ marginBottom: 0 }} type="secondary">
+                            教师建议：{item.resolution_notes}
+                          </Paragraph>
+                        )}
+                      </Space>
+                    </Space>
+                  </List.Item>
+                );
+              }}
+            />
+          )}
+        </Space>
+      </Card>
+
       <Row gutter={[20, 20]}>
         <Col xs={24} md={16}>
           <PageLayout
@@ -433,7 +801,11 @@ const TeacherAssistant = () => {
                             boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
                           }}
                         >
-                          <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{item.content}</Paragraph>
+                          {isUser ? (
+                            <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{item.content}</Paragraph>
+                          ) : (
+                            renderAssistantContent(item.content)
+                          )}
                         </Card>
                         {isUser && <Avatar icon={<UserOutlined />} style={{ background: "#1e293b" }} />}
                       </Space>
@@ -458,14 +830,14 @@ const TeacherAssistant = () => {
 
               <Space style={{ width: "100%", justifyContent: "space-between" }}>
                 <Space>
-                  {defaultTips.map((tip) => (
+                  {quickActions.map((action) => (
                     <Tag
-                      key={tip}
-                      icon={<FireOutlined />}
+                      key={action.label}
+                      icon={action.icon}
                       style={{ cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1 }}
-                      onClick={() => (!loading ? handleSend(tip) : undefined)}
+                      onClick={() => (!loading ? handleSend(action.prompt) : undefined)}
                     >
-                      一键生成
+                      {action.label}
                     </Tag>
                   ))}
                 </Space>

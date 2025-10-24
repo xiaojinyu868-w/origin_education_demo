@@ -146,7 +146,7 @@ Vite 已配置代理，前端访问 `/api/*` 会转发至 FastAPI。
 - `POST /bootstrap/demo/refresh`：重置数据库并重新生成完整演示数据。
 - `POST /submissions/upload`：上传试卷图片并触发自动批改。
 - `GET /students/{id}/mistakes`：获取学生错题列表。
-- `POST /practice` / `GET /practice` / `POST /practice/complete`：生成、查询、更新练习任务。
+  - `POST /practice` / `GET /practice` / `POST /practice/complete`：生成、查询、更新练习任务。
 - `POST /analytics`：统计班级知识点正确率、平均分等指标。
 
 ## 调优建议
@@ -160,3 +160,16 @@ Vite 已配置代理，前端访问 `/api/*` 会转发至 FastAPI。
 
 ## 文档 / Docs
 - Upload Center 历史回放 / Upload Center History Playback: `docs/upload-center-history.md`
+
+
+用户非来不可的理由
+教师：
+学生
+
+TO DO LIST 
+打通错题和智能助手，错题真毒
+优化批改体验（流程3，4）
+优化显示逻辑
+支持PADDLE OCR
+实现完整的题目录入
+开发错题多邻国应用，探索错题的多种可能的利用方式

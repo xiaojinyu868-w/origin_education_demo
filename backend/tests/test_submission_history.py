@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
 import sys
 
@@ -18,8 +18,20 @@ if str(ROOT_DIR) not in sys.path:
 
 from backend.app import models  # noqa: F401 - ensure SQLModel metadata is populated
 from backend.app.main import app, _get_db
-from backend.app.models import Exam, Question, QuestionType, Student, SubmissionStatus, Teacher
+from backend.app.models import (
+    Exam,
+    Question,
+    QuestionType,
+    Response,
+    ResponseReviewStatus,
+    Student,
+    Submission,
+    SubmissionStatus,
+    Teacher,
+    User,
+)
 from backend.app.services.grading import GradingArtifacts, PipelineStep
+from backend.app.security import get_current_user, get_password_hash
 
 
 @pytest.fixture(name="engine")
@@ -43,6 +55,23 @@ def client_fixture(engine: Engine) -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[_get_db] = get_session_override
+
+    def get_user_override() -> User:
+        with Session(engine) as session:
+            user = session.exec(select(User)).first()
+            if user is None:
+                user = User(
+                    email="demo@local",
+                    name="演示教师",
+                    hashed_password=get_password_hash("demo"),
+                    is_demo=True,
+                )
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            return user
+
+    app.dependency_overrides[get_current_user] = get_user_override
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -59,12 +88,24 @@ def test_upload_submission_populates_history(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    teacher = Teacher(name="测试教师", email="teacher@example.com")
+    demo_user = db_session.exec(select(User)).first()
+    if demo_user is None:
+        demo_user = User(
+            email="demo@local",
+            name="演示教师",
+            hashed_password=get_password_hash("demo"),
+            is_demo=True,
+        )
+        db_session.add(demo_user)
+        db_session.commit()
+        db_session.refresh(demo_user)
+
+    teacher = Teacher(name="测试教师", email="teacher@example.com", owner_id=demo_user.id)
     db_session.add(teacher)
     db_session.commit()
     db_session.refresh(teacher)
 
-    exam = Exam(title="单元测试", teacher_id=teacher.id)
+    exam = Exam(title="单元测试", teacher_id=teacher.id, owner_id=demo_user.id)
     db_session.add(exam)
     db_session.commit()
     db_session.refresh(exam)
@@ -79,7 +120,7 @@ def test_upload_submission_populates_history(
     )
     db_session.add(question)
 
-    student = Student(name="测试学生", email="student@example.com")
+    student = Student(name="测试学生", email="student@example.com", owner_id=demo_user.id)
     db_session.add(student)
     db_session.commit()
     db_session.refresh(student)
@@ -138,3 +179,113 @@ def test_upload_submission_populates_history(
     assert len(logs) == 3
     assert logs[0]["step"] == "OCR 解析"
     assert logs[-1]["step"] == "AI 批改摘要"
+
+
+def test_bulk_confirm_allows_target_status_updates(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    user = db_session.exec(select(User)).first()
+    if user is None:
+        user = User(
+            email="demo@local",
+            name="演示教师",
+            hashed_password=get_password_hash("demo"),
+            is_demo=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+    teacher = Teacher(name="批量测试教师", email="teacher+bulk@example.com", owner_id=user.id)
+    db_session.add(teacher)
+    db_session.commit()
+    db_session.refresh(teacher)
+
+    exam = Exam(title="批量确认测试卷", teacher_id=teacher.id, owner_id=user.id)
+    db_session.add(exam)
+    db_session.commit()
+    db_session.refresh(exam)
+
+    question = Question(
+        exam_id=exam.id,
+        number="1",
+        type=QuestionType.multiple_choice,
+        prompt="1 + 1 = ?",
+        max_score=1.0,
+        answer_key={"options": ["A", "B"], "correct": "A"},
+    )
+    db_session.add(question)
+    db_session.commit()
+    db_session.refresh(question)
+
+    student = Student(name="批量学生", email="bulk-student@example.com", owner_id=user.id)
+    db_session.add(student)
+    db_session.commit()
+    db_session.refresh(student)
+
+    submission = Submission(
+        student_id=student.id,
+        exam_id=exam.id,
+        owner_id=user.id,
+        status=SubmissionStatus.pending,
+    )
+    db_session.add(submission)
+    db_session.commit()
+    db_session.refresh(submission)
+
+    response_pending = Response(
+        submission_id=submission.id,
+        question_id=question.id,
+        student_answer="A",
+        review_status=ResponseReviewStatus.pending,
+    )
+    response_confirmed = Response(
+        submission_id=submission.id,
+        question_id=question.id,
+        student_answer="B",
+        review_status=ResponseReviewStatus.confirmed,
+    )
+    db_session.add(response_pending)
+    db_session.add(response_confirmed)
+    db_session.commit()
+    db_session.refresh(response_pending)
+    db_session.refresh(response_confirmed)
+
+    confirm_payload = {
+        "response_ids": [response_pending.id, response_confirmed.id],
+        "target_status": "confirmed",
+    }
+    confirm_resp = client.post(
+        f"/submissions/{submission.id}/responses/bulk_confirm",
+        json=confirm_payload,
+    )
+    assert confirm_resp.status_code == 200
+    confirm_data = confirm_resp.json()
+    assert confirm_data["updated_count"] == 1
+
+    db_session.refresh(response_pending)
+    db_session.refresh(response_confirmed)
+    db_session.refresh(submission)
+    assert response_pending.review_status == ResponseReviewStatus.confirmed
+    assert response_confirmed.review_status == ResponseReviewStatus.confirmed
+    assert submission.status == SubmissionStatus.graded
+
+    flag_payload = {
+        "response_ids": [response_pending.id, response_confirmed.id],
+        "target_status": "needs_review",
+    }
+    flag_resp = client.post(
+        f"/submissions/{submission.id}/responses/bulk_confirm",
+        json=flag_payload,
+    )
+    assert flag_resp.status_code == 200
+    flag_data = flag_resp.json()
+    assert flag_data["updated_count"] == 2
+
+    db_session.refresh(response_pending)
+    db_session.refresh(response_confirmed)
+    db_session.refresh(submission)
+    assert response_pending.review_status == ResponseReviewStatus.needs_review
+    assert response_confirmed.review_status == ResponseReviewStatus.needs_review
+    assert submission.status == SubmissionStatus.needs_review

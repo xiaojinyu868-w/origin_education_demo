@@ -237,6 +237,7 @@ class Exam(SQLModel, table=True):
     answer_key_version: int = Field(default=1)
     source_image_path: Optional[str] = None
     parsed_outline: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    extra_metadata: Optional[dict] = Field(default=None, sa_column=Column("exam_extra_metadata", JSON))
 
     teacher: Optional["Teacher"] = Relationship(
         back_populates="exams",
@@ -345,6 +346,7 @@ class Response(SQLModel, table=True):
     review_status: ResponseReviewStatus = Field(default=ResponseReviewStatus.pending, index=True)
     teacher_comment: Optional[str] = None
     ai_raw: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    extra_metadata: Optional[dict] = Field(default=None, sa_column=Column("response_extra_metadata", JSON))
 
     submission: Optional["Submission"] = Relationship(
         back_populates="responses",

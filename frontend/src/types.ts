@@ -44,6 +44,7 @@ export interface Question {
   target_student_ids?: number[] | null;
   answer_status?: AnswerStatus;
   answer_confidence?: number | null;
+  extra_metadata?: Record<string, unknown> | null;
 }
 
 export interface Exam {
@@ -57,6 +58,7 @@ export interface Exam {
   questions: Question[];
   source_image_path?: string | null;
   parsed_outline?: Record<string, unknown> | null;
+  extra_metadata?: Record<string, unknown> | null;
 }
 
 export interface SubmissionResponse {
@@ -74,6 +76,16 @@ export interface SubmissionResponse {
   review_status?: ResponseReviewStatus;
   teacher_comment?: string | null;
   ai_raw?: Record<string, unknown> | null;
+  extra_metadata?: Record<string, unknown> | null;
+  match_strategy?: string;
+  suspicious_matches?: Array<Record<string, unknown>>;
+  blocked_supplement?: string;
+}
+
+export interface ResponseBulkConfirmResult {
+  message: string;
+  updated_count: number;
+  submission: SubmissionDetail;
 }
 
 export interface SubmissionDetail {
@@ -119,12 +131,17 @@ export interface ProcessingLog {
 export interface Mistake {
   id: number;
   question_id: number;
+  response_id: number;
+  student_id: number;
   knowledge_tags?: string;
   misconception_label?: string;
   resolution_notes?: string;
   created_at: string;
   last_seen_at: string;
   times_practiced: number;
+  error_count: number;
+  data_status: string;
+  root_cause?: string | null;
 }
 
 export interface PracticeAssignment {

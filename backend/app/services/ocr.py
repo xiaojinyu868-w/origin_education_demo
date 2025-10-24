@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from .llm import LLMInvocationError, LLMNotConfiguredError, run_vision_ocr
+from .question_utils import normalize_question_label
 
 
 ANNOTATION_TOKENS = {
@@ -85,6 +86,7 @@ def _extract_with_easyocr(image_bytes: bytes) -> List[Dict[str, Optional[str]]]:
                 "raw_text": answer_text,
                 "annotation": None,
                 "confidence": float(confidence),
+                "normalized_number": normalize_question_label(number),
             }
             rows.append(current_row)
             continue

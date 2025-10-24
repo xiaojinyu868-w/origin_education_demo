@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
 import sys
 from pathlib import Path
@@ -17,7 +17,8 @@ if str(ROOT_DIR) not in sys.path:
 
 from backend.app import models  # noqa: F401
 from backend.app.main import app, _get_db
-from backend.app.models import Exam, Mistake, MistakeAnalysis, Question, QuestionType, Response, Student, Submission
+from backend.app.models import Exam, Mistake, MistakeAnalysis, Question, QuestionType, Response, Student, Submission, User
+from backend.app.security import get_current_user, get_password_hash
 
 
 @pytest.fixture(name="engine")
@@ -41,6 +42,23 @@ def client_fixture(engine: Engine) -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[_get_db] = get_session_override
+
+    def get_user_override() -> User:
+        with Session(engine) as session:
+            user = session.exec(select(User)).first()
+            if user is None:
+                user = User(
+                    email="demo@local",
+                    name="演示教师",
+                    hashed_password=get_password_hash("demo"),
+                    is_demo=True,
+                )
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            return user
+
+    app.dependency_overrides[get_current_user] = get_user_override
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -52,13 +70,13 @@ def db_session_fixture(engine: Engine) -> Generator[Session, None, None]:
         yield session
 
 
-def _bootstrap_student_with_mistake(session: Session) -> Student:
-    student = Student(name="测试学生", grade_level="初三")
+def _bootstrap_student_with_mistake(session: Session, owner_id: int) -> Student:
+    student = Student(name="测试学生", grade_level="初三", owner_id=owner_id)
     session.add(student)
     session.commit()
     session.refresh(student)
 
-    exam = Exam(title="诊断卷", teacher_id=1)
+    exam = Exam(title="诊断卷", teacher_id=1, owner_id=owner_id)
     session.add(exam)
     session.commit()
     session.refresh(exam)
@@ -76,7 +94,7 @@ def _bootstrap_student_with_mistake(session: Session) -> Student:
     session.commit()
     session.refresh(question)
 
-    submission = Submission(student_id=student.id, exam_id=exam.id)
+    submission = Submission(student_id=student.id, exam_id=exam.id, owner_id=owner_id)
     session.add(submission)
     session.commit()
     session.refresh(submission)
@@ -106,7 +124,19 @@ def _bootstrap_student_with_mistake(session: Session) -> Student:
 
 
 def test_student_profile_and_analysis_flow(client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    student = _bootstrap_student_with_mistake(db_session)
+    demo_user = db_session.exec(select(User)).first()
+    if demo_user is None:
+        demo_user = User(
+            email="demo@local",
+            name="演示教师",
+            hashed_password=get_password_hash("demo"),
+            is_demo=True,
+        )
+        db_session.add(demo_user)
+        db_session.commit()
+        db_session.refresh(demo_user)
+
+    student = _bootstrap_student_with_mistake(db_session, demo_user.id)
 
     profile_resp = client.get(f"/demo/students/{student.id}/profile")
     assert profile_resp.status_code == 200

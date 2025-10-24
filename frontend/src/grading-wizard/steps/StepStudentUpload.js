@@ -3,7 +3,7 @@ import { Alert, Button, Card, Col, Empty, List, Row, Select, Space, Spin, Tag, T
 import { InboxOutlined, LoadingOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchStudents, uploadSubmission } from "../../api/services";
+import { fetchStudents, fetchSubmissions, uploadSubmission } from "../../api/services";
 import { useWizardStore } from "../useWizardStore";
 const { Title, Paragraph, Text } = Typography;
 const StepStudentUpload = () => {
@@ -12,6 +12,26 @@ const StepStudentUpload = () => {
     const [studentsLoading, setStudentsLoading] = useState(false);
     const [selectedStudentId, setSelectedStudentId] = useState(undefined);
     const [queue, setQueue] = useState([]);
+    const [uploadSummary, setUploadSummary] = useState({ total: 0, completed: 0, pending: 0 });
+    const refreshUploadSummary = useCallback(async () => {
+        if (!selectedExamId) {
+            setUploadSummary({ total: 0, completed: 0, pending: 0 });
+            return null;
+        }
+        try {
+            const submissions = await fetchSubmissions({ exam_id: selectedExamId });
+            const total = submissions.length;
+            const completed = submissions.filter((item) => item.status === "graded").length;
+            const pending = Math.max(total - completed, 0);
+            const summary = { total, completed, pending };
+            setUploadSummary(summary);
+            return summary;
+        }
+        catch (error) {
+            console.error("无法刷新上传进度", error);
+            return null;
+        }
+    }, [selectedExamId]);
     const loadStudents = useCallback(async () => {
         setStudentsLoading(true);
         try {
@@ -33,6 +53,52 @@ const StepStudentUpload = () => {
     useEffect(() => {
         void loadStudents();
     }, [loadStudents]);
+    useEffect(() => {
+        void refreshUploadSummary();
+    }, [refreshUploadSummary]);
+    useEffect(() => {
+        if (!session || !selectedExamId) {
+            return;
+        }
+        const { total, completed, pending } = uploadSummary;
+        if (total === 0 && completed === 0 && pending === 0) {
+            return;
+        }
+        const payloadRoot = (session.payload ?? {});
+        const wizardProgress = payloadRoot.wizardProgress && typeof payloadRoot.wizardProgress === "object"
+            ? payloadRoot.wizardProgress
+            : {};
+        const uploadsSegment = wizardProgress.uploads && typeof wizardProgress.uploads === "object"
+            ? wizardProgress.uploads
+            : {};
+        const toNum = (value) => typeof value === "number" && Number.isFinite(value)
+            ? value
+            : Number.isFinite(Number(value))
+                ? Number(value)
+                : undefined;
+        const same = toNum(uploadsSegment.total) === total &&
+            (toNum(uploadsSegment.completed) ??
+                toNum(uploadsSegment.confirmed)) === completed &&
+            toNum(uploadsSegment.pending) === pending;
+        if (same) {
+            return;
+        }
+        void goToStep(3, {
+            examId: selectedExamId,
+            payload: {
+                wizardProgress: {
+                    uploads: {
+                        total,
+                        completed,
+                        pending,
+                        updatedAt: new Date().toISOString(),
+                    },
+                },
+            },
+        }).catch((error) => {
+            console.error("无法同步上传进度", error);
+        });
+    }, [session, selectedExamId, uploadSummary, goToStep]);
     const selectedStudent = useMemo(() => students.find((item) => item.id === selectedStudentId), [students, selectedStudentId]);
     const handleUpload = async (file) => {
         if (!selectedExamId) {
@@ -63,6 +129,7 @@ const StepStudentUpload = () => {
             const result = await uploadSubmission(formData);
             setQueue((prev) => prev.map((item) => (item.id === queueId ? { ...item, status: "completed", result } : item)));
             message.success(`${file.name} 已加入批改队列`);
+            void refreshUploadSummary();
         }
         catch (error) {
             const detail = (error?.response?.data?.detail ||
@@ -78,26 +145,52 @@ const StepStudentUpload = () => {
         beforeUpload: handleUpload,
         showUploadList: false,
     };
-    const completedCount = queue.filter((item) => item.status === "completed").length;
+    const queueProcessingCount = queue.filter((item) => item.status === "processing").length;
     const handleProceed = async () => {
-        if (!selectedExamId)
+        if (!selectedExamId) {
             return;
+        }
+        if (queueProcessingCount > 0) {
+            message.info(`仍有 ${queueProcessingCount} 份处理中，请稍候`);
+            return;
+        }
+        if (uploadSummary.total === 0) {
+            message.warning("请至少上传一份学生卷面后再继续");
+            return;
+        }
+        if (uploadSummary.pending > 0) {
+            message.warning(`仍有 ${uploadSummary.pending} 份卷面待批改完成`);
+            return;
+        }
         try {
-            await goToStep(4, { examId: selectedExamId });
-            message.success("学生卷面已上传，进入批改确认阶段");
+            const now = new Date().toISOString();
+            await goToStep(4, {
+                examId: selectedExamId,
+                payload: {
+                    wizardProgress: {
+                        uploads: {
+                            total: uploadSummary.total,
+                            completed: uploadSummary.completed,
+                            pending: uploadSummary.pending,
+                            updatedAt: now,
+                        },
+                    },
+                },
+            });
+            message.success("上传工作已完成，进入 AI 批改确认阶段");
         }
         catch (error) {
             const detail = (error?.response?.data?.detail ||
-                (error instanceof Error ? error.message : "无法进入下一步"));
+                (error instanceof Error ? error.message : "无法进入下一阶段"));
             message.error(detail);
         }
     };
     if (!selectedExamId) {
         return (_jsx(Alert, { type: "warning", showIcon: true, message: "\u5C1A\u672A\u9009\u62E9\u8BD5\u5377", description: "\u8BF7\u8FD4\u56DE\u8BD5\u5377\u914D\u7F6E\u9636\u6BB5\u9009\u62E9\u5DF2\u786E\u8BA4\u7B54\u6848\u7684\u8BD5\u5377\u3002" }));
     }
-    return (_jsxs(Space, { direction: "vertical", size: 24, style: { width: "100%" }, children: [_jsxs(Space, { direction: "vertical", size: 8, children: [_jsx(Title, { level: 3, style: { margin: 0 }, children: "\u4E0A\u4F20\u5B66\u751F\u5377\u9762" }), _jsx(Paragraph, { type: "secondary", style: { marginBottom: 0 }, children: "\u652F\u6301\u62D6\u62FD\u6216\u6279\u91CF\u4E0A\u4F20\uFF0C\u7CFB\u7EDF\u4F1A\u81EA\u52A8\u8BC6\u522B\u9898\u53F7\u5E76\u7ED9\u51FA\u7F6E\u4FE1\u5EA6\uFF1B\u82E5\u8BC6\u522B\u5EA6\u4F4E\uFF0C\u53EF\u5728\u4E0B\u4E00\u9636\u6BB5\u4EBA\u5DE5\u786E\u8BA4\u3002" })] }), _jsxs(Row, { gutter: 24, wrap: true, children: [_jsx(Col, { xs: 24, xl: 12, children: _jsx(Card, { title: "\u6279\u91CF\u4E0A\u4F20", bordered: false, style: { borderRadius: 18, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }, bodyStyle: { padding: 24 }, children: _jsxs(Space, { direction: "vertical", size: 20, style: { width: "100%" }, children: [_jsxs("div", { children: [_jsx(Text, { strong: true, style: { marginBottom: 8, display: "block" }, children: "\u9009\u62E9\u5B66\u751F" }), _jsx(Spin, { spinning: studentsLoading, indicator: _jsx(LoadingOutlined, { spin: true }), children: _jsx(Select, { showSearch: true, placeholder: "\u9009\u62E9\u5B66\u751F", optionFilterProp: "label", style: { width: "100%" }, value: selectedStudentId, options: students.map((student) => ({
+    return (_jsxs(Space, { direction: "vertical", size: 24, style: { width: "100%" }, children: [_jsxs(Space, { direction: "vertical", size: 8, children: [_jsx(Title, { level: 3, style: { margin: 0 }, children: "\u4E0A\u4F20\u5B66\u751F\u5377\u9762" }), _jsxs(Paragraph, { type: "secondary", style: { marginBottom: 0 }, children: ["\u652F\u6301\u62D6\u62FD\u6216\u6279\u91CF\u4E0A\u4F20\uFF0C\u7CFB\u7EDF\u4F1A\u81EA\u52A8\u8BC6\u522B\u9898\u53F7\u5E76\u7ED9\u51FA\u7F6E\u4FE1\u5EA6\uFF1B\u82E5\u8BC6\u522B\u5EA6\u4F4E\uFF0C\u53EF\u5728\u4E0B\u4E00\u9636\u6BB5\u4EBA\u5DE5\u786E\u8BA4\u3002", _jsx("br", {}), "\u5F53\u524D\u5DF2\u4E0A\u4F20 ", uploadSummary.total, " \u4EFD\u5377\u9762\uFF0C\u5176\u4E2D ", uploadSummary.completed, " \u4EFD\u5DF2\u5B8C\u6210\u6279\u6539\u3002"] })] }), _jsxs(Row, { gutter: 24, wrap: true, children: [_jsx(Col, { xs: 24, xl: 12, children: _jsx(Card, { title: "\u6279\u91CF\u4E0A\u4F20", bordered: false, style: { borderRadius: 18, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }, bodyStyle: { padding: 24 }, children: _jsxs(Space, { direction: "vertical", size: 20, style: { width: "100%" }, children: [_jsxs("div", { children: [_jsx(Text, { strong: true, style: { marginBottom: 8, display: "block" }, children: "\u9009\u62E9\u5B66\u751F" }), _jsx(Spin, { spinning: studentsLoading, indicator: _jsx(LoadingOutlined, { spin: true }), children: _jsx(Select, { showSearch: true, placeholder: "\u9009\u62E9\u5B66\u751F", optionFilterProp: "label", style: { width: "100%" }, value: selectedStudentId, options: students.map((student) => ({
                                                         label: `${student.name} · ${student.grade_level ?? "未分班"}`,
                                                         value: student.id,
-                                                    })), onChange: (value) => setSelectedStudentId(value) }) })] }), _jsxs(Upload.Dragger, { ...uploadProps, disabled: studentsLoading, children: [_jsx("p", { className: "ant-upload-drag-icon", children: _jsx(InboxOutlined, {}) }), _jsx("p", { className: "ant-upload-text", children: "\u62D6\u62FD\u6216\u70B9\u51FB\u4E0A\u4F20\u5B66\u751F\u5377\u9762\u56FE\u7247" }), _jsx("p", { className: "ant-upload-hint", children: "\u652F\u6301 JPG/PNG\uFF0C\u5EFA\u8BAE\u4FDD\u6301\u6E05\u6670\u5EA6 > 300dpi" })] }), _jsx(Alert, { type: "info", showIcon: true, message: "\u63D0\u793A", description: "\u4E0A\u4F20\u540E\u7CFB\u7EDF\u4F1A\u7ACB\u5373\u8C03\u7528 AI \u6279\u6539\uFF0C\u5E76\u5C06\u7ED3\u679C\u8FDB\u5165\u961F\u5217\u3002\u60A8\u53EF\u4EE5\u5728\u53F3\u4FA7\u5B9E\u65F6\u67E5\u770B\u5904\u7406\u72B6\u6001\u3002" })] }) }) }), _jsx(Col, { xs: 24, xl: 12, children: _jsxs(Card, { title: "\u5904\u7406\u961F\u5217", bordered: false, style: { borderRadius: 18, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }, bodyStyle: { padding: 24 }, extra: _jsxs(Tag, { color: completedCount > 0 ? "green" : "orange", children: ["\u5DF2\u5B8C\u6210 ", completedCount] }), children: [queue.length === 0 ? (_jsx(Empty, { description: "\u961F\u5217\u4E3A\u7A7A\uFF0C\u7B49\u5F85\u4E0A\u4F20", image: Empty.PRESENTED_IMAGE_SIMPLE })) : (_jsx(List, { dataSource: queue, renderItem: (item) => (_jsx(List.Item, { children: _jsxs(Space, { direction: "vertical", size: 6, style: { width: "100%" }, children: [_jsxs(Space, { align: "center", size: 10, wrap: true, children: [_jsx(Text, { strong: true, children: item.fileName }), _jsx(Tag, { color: "geekblue", children: item.studentName }), _jsx(Tag, { color: "gray", children: dayjs(item.startedAt).format("HH:mm:ss") }), item.status === "processing" && _jsx(Tag, { color: "blue", children: "\u5904\u7406\u4E2D" }), item.status === "completed" && _jsx(Tag, { color: "green", children: "\u5DF2\u5B8C\u6210" }), item.status === "error" && _jsx(Tag, { color: "red", children: "\u5931\u8D25" })] }), item.result?.matching_score !== undefined && (_jsxs(Text, { type: "secondary", children: ["\u5339\u914D\u5EA6\uFF1A", Math.round((item.result.matching_score ?? 0) * 100), "%"] })), item.error && _jsx(Text, { type: "danger", children: item.error })] }) }, item.id)) })), _jsx(Space, { style: { marginTop: 16 }, children: _jsx(Button, { type: "primary", disabled: completedCount === 0, onClick: handleProceed, children: "\u6240\u6709\u961F\u5217\u5B8C\u6210\uFF0C\u524D\u5F80AI\u6279\u6539\u786E\u8BA4" }) })] }) })] })] }));
+                                                    })), onChange: (value) => setSelectedStudentId(value) }) })] }), _jsxs(Upload.Dragger, { ...uploadProps, disabled: studentsLoading, children: [_jsx("p", { className: "ant-upload-drag-icon", children: _jsx(InboxOutlined, {}) }), _jsx("p", { className: "ant-upload-text", children: "\u62D6\u62FD\u6216\u70B9\u51FB\u4E0A\u4F20\u5B66\u751F\u5377\u9762\u56FE\u7247" }), _jsx("p", { className: "ant-upload-hint", children: "\u652F\u6301 JPG/PNG\uFF0C\u5EFA\u8BAE\u4FDD\u6301\u6E05\u6670\u5EA6 > 300dpi" })] }), _jsx(Alert, { type: "info", showIcon: true, message: "\u63D0\u793A", description: "\u4E0A\u4F20\u540E\u7CFB\u7EDF\u4F1A\u7ACB\u5373\u8C03\u7528 AI \u6279\u6539\uFF0C\u5E76\u5C06\u7ED3\u679C\u8FDB\u5165\u961F\u5217\u3002\u60A8\u53EF\u4EE5\u5728\u53F3\u4FA7\u5B9E\u65F6\u67E5\u770B\u5904\u7406\u72B6\u6001\u3002" })] }) }) }), _jsx(Col, { xs: 24, xl: 12, children: _jsxs(Card, { title: "\u5904\u7406\u961F\u5217", bordered: false, style: { borderRadius: 18, boxShadow: "0 24px 60px rgba(15,23,42,0.06)" }, bodyStyle: { padding: 24 }, extra: _jsxs(Tag, { color: uploadSummary.total > 0 ? "green" : "orange", children: ["\u5DF2\u4E0A\u4F20 ", uploadSummary.total, " \u4EFD \u00B7 \u5B8C\u6210 ", uploadSummary.completed, " \u4EFD"] }), children: [queue.length === 0 ? (_jsx(Empty, { description: "\u961F\u5217\u4E3A\u7A7A\uFF0C\u7B49\u5F85\u4E0A\u4F20", image: Empty.PRESENTED_IMAGE_SIMPLE })) : (_jsx(List, { dataSource: queue, renderItem: (item) => (_jsx(List.Item, { children: _jsxs(Space, { direction: "vertical", size: 6, style: { width: "100%" }, children: [_jsxs(Space, { align: "center", size: 10, wrap: true, children: [_jsx(Text, { strong: true, children: item.fileName }), _jsx(Tag, { color: "geekblue", children: item.studentName }), _jsx(Tag, { color: "gray", children: dayjs(item.startedAt).format("HH:mm:ss") }), item.status === "processing" && _jsx(Tag, { color: "blue", children: "\u5904\u7406\u4E2D" }), item.status === "completed" && _jsx(Tag, { color: "green", children: "\u5DF2\u5B8C\u6210" }), item.status === "error" && _jsx(Tag, { color: "red", children: "\u5931\u8D25" })] }), item.result?.matching_score !== undefined && (_jsxs(Text, { type: "secondary", children: ["\u5339\u914D\u5EA6\uFF1A", Math.round((item.result.matching_score ?? 0) * 100), "%"] })), item.error && _jsx(Text, { type: "danger", children: item.error })] }) }, item.id)) })), _jsxs(Space, { style: { marginTop: 16 }, children: [_jsx(Button, { type: "primary", disabled: uploadSummary.total === 0, onClick: handleProceed, children: "\u6240\u6709\u5377\u9762\u5DF2\u5904\u7406\uFF0C\u524D\u5F80 AI \u6279\u6539\u786E\u8BA4" }), queueProcessingCount > 0 && (_jsxs(Text, { type: "secondary", children: ["\u4ECD\u6709 ", queueProcessingCount, " \u4EFD\u5904\u7406\u4E2D\uFF0C\u8BF7\u7A0D\u5019"] }))] })] }) })] })] }));
 };
 export default StepStudentUpload;

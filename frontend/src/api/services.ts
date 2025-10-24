@@ -15,6 +15,8 @@ import type {
   SubmissionDetail,
   SubmissionHistoryEntry,
   SubmissionProcessingResult,
+  ResponseBulkConfirmResult,
+  ResponseReviewStatus,
   SubmissionResponse,
   Teacher,
   TeacherFeedback,
@@ -144,6 +146,19 @@ export const updateExamAnswerKey = async (examId: number, payload: unknown) => {
   return data;
 };
 
+export const confirmAllExamAnswers = async (examId: number) => {
+  const { data } = await apiClient.post<Exam>(`/exams/${examId}/answers/confirm_all`);
+  return data;
+};
+
+export const updateExamSettings = async (
+  examId: number,
+  payload: { answer_mode?: "strict" | "smart" },
+) => {
+  const { data } = await apiClient.patch<Exam>(`/exams/${examId}`, payload);
+  return data;
+};
+
 export const createGradingSession = async (payload: {
   teacher_id: number;
   exam_id?: number;
@@ -213,13 +228,33 @@ export const updateManualScore = async (payload: {
   return data;
 };
 
+export const bulkUpdateResponses = async (
+  submissionId: number,
+  payload: {
+    response_ids?: number[];
+    status?: ResponseReviewStatus[];
+    target_status?: ResponseReviewStatus;
+  },
+) => {
+  const { data } = await apiClient.post<ResponseBulkConfirmResult>(
+    `/submissions/${submissionId}/responses/bulk_confirm`,
+    payload,
+  );
+  return data;
+};
+
 export const fetchSubmissionLogs = async (submissionId: number) => {
   const { data } = await apiClient.get<ProcessingLogList>(`/submissions/${submissionId}/logs`);
   return data;
 };
 
-export const fetchStudentMistakes = async (studentId: number) => {
-  const { data } = await apiClient.get<Mistake[]>(`/students/${studentId}/mistakes`);
+export const fetchStudentMistakes = async (
+  studentId: number,
+  params: { knowledge_tag?: string; status?: string; limit?: number; recent_days?: number } = {},
+) => {
+  const { data } = await apiClient.get<Mistake[]>(`/students/${studentId}/mistakes`, {
+    params,
+  });
   return data;
 };
 

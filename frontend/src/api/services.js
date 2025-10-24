@@ -78,6 +78,14 @@ export const updateExamAnswerKey = async (examId, payload) => {
     const { data } = await apiClient.patch(`/exams/${examId}/answer-key`, payload);
     return data;
 };
+export const confirmAllExamAnswers = async (examId) => {
+    const { data } = await apiClient.post(`/exams/${examId}/answers/confirm_all`);
+    return data;
+};
+export const updateExamSettings = async (examId, payload) => {
+    const { data } = await apiClient.patch(`/exams/${examId}`, payload);
+    return data;
+};
 export const createGradingSession = async (payload) => {
     const { data } = await apiClient.post("/grading/sessions", payload);
     return data;
@@ -114,12 +122,18 @@ export const updateManualScore = async (payload) => {
     const { data } = await apiClient.post(`/responses/manual-score`, payload);
     return data;
 };
+export const bulkUpdateResponses = async (submissionId, payload) => {
+    const { data } = await apiClient.post(`/submissions/${submissionId}/responses/bulk_confirm`, payload);
+    return data;
+};
 export const fetchSubmissionLogs = async (submissionId) => {
     const { data } = await apiClient.get(`/submissions/${submissionId}/logs`);
     return data;
 };
-export const fetchStudentMistakes = async (studentId) => {
-    const { data } = await apiClient.get(`/students/${studentId}/mistakes`);
+export const fetchStudentMistakes = async (studentId, params = {}) => {
+    const { data } = await apiClient.get(`/students/${studentId}/mistakes`, {
+        params,
+    });
     return data;
 };
 export const createPractice = async (payload) => {
