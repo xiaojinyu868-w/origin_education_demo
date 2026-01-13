@@ -100,7 +100,7 @@ const StepCompletion = () => {
             导出批改报告
           </Button>
           <Tooltip title="查看全部批改记录与操作日志">
-            <Button icon={<HistoryOutlined />} onClick={() => navigate("/upload")} />
+            <Button icon={<HistoryOutlined />} onClick={() => navigate("/library/upload")} />
           </Tooltip>
         </Space>
       ),
@@ -124,7 +124,7 @@ const StepCompletion = () => {
       actions: (
         <Button
           type="default"
-          onClick={() => navigate("/practice")}
+          onClick={() => navigate("/toolkit/practice")}
           disabled={!progress.review.ready}
         >
           前往布置练习

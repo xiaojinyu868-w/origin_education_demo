@@ -1,7 +1,10 @@
+/**
+ * Navigation event utilities
+ */
 export const NAVIGATE_EVENT = "app:navigate";
+/**
+ * Emit a navigation event to trigger route change
+ */
 export const emitNavigation = (key) => {
-    if (typeof window !== "undefined") {
-        const event = new CustomEvent(NAVIGATE_EVENT, { detail: key });
-        window.dispatchEvent(event);
-    }
+    window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: key }));
 };

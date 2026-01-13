@@ -1,0 +1,60 @@
+{
+  "err_20251228202816_df3ba009": {
+    "id": "err_20251228202816_df3ba009",
+    "image_path": "data\\uploads\\20251228202816_08d56146.png",
+    "image_description": "产品设计-智能会议工具-功能介绍与商业价值分析",
+    "chat_history": [
+      {
+        "role": "ai",
+        "content": "这是一款智能会议工具的介绍，你对哪个功能最感兴趣？",
+        "timestamp": "2025-12-28T20:28:20.160931"
+      },
+      {
+        "role": "user",
+        "content": "详细说一下",
+        "timestamp": "2025-12-28T20:31:40.238981"
+      },
+      {
+        "role": "ai",
+        "content": "好的，你对哪个具体功能最感兴趣？",
+        "timestamp": "2025-12-28T20:31:42.211640"
+      },
+      {
+        "role": "user",
+        "content": "有什么功能",
+        "timestamp": "2025-12-28T20:31:50.362918"
+      },
+      {
+        "role": "ai",
+        "content": "这款工具可以自动记录会议内容，你觉得这个功能怎么样？",
+        "timestamp": "2025-12-28T20:31:52.147051"
+      }
+    ],
+    "key_insight": null,
+    "analysis": null,
+    "note_image_path": null,
+    "note_style": "minimal",
+    "status": "chatting",
+    "created_at": "2025-12-28T20:28:16.234174",
+    "updated_at": "2025-12-28T20:31:52.147051"
+  },
+  "err_20251229142218_51676751": {
+    "id": "err_20251229142218_51676751",
+    "image_path": "data\\uploads\\20251229142218_be9cd2fe.png",
+    "image_description": "计算机视觉-视频理解-物体状态变化分析",
+    "chat_history": [
+      {
+        "role": "ai",
+        "content": "这道题是关于视频内容分析的，你对‘Moving’这个标注有什么想法吗？",
+        "timestamp": "2025-12-29T14:22:20.911630"
+      }
+    ],
+    "key_insight": null,
+    "analysis": null,
+    "note_image_path": null,
+    "note_style": "minimal",
+    "status": "chatting",
+    "created_at": "2025-12-29T14:22:18.623340",
+    "updated_at": "2025-12-29T14:22:20.911630"
+  }
+}

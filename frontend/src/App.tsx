@@ -29,7 +29,15 @@ import { AuthProvider } from "./context/AuthContext";
 import useAuth from "./hooks/useAuth";
 import AuthPage from "./pages/AuthPage";
 import type { NavItem, NavKey, NavComponent } from "./types/navigation";
+import ModuleLayout, { MODULES } from "./components/ModuleLayout";
 import { safeStorage } from "./utils/storage";
+import { appTheme } from "./styles/theme";
+import dayjs from "dayjs";
+import "dayjs/locale/zh-cn";
+import relativeTime from "dayjs/plugin/relativeTime";
+
+dayjs.locale("zh-cn");
+dayjs.extend(relativeTime);
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const RosterSetup = lazy(() => import("./pages/RosterSetup"));
@@ -39,69 +47,17 @@ const PracticeCenter = lazy(() => import("./pages/PracticeCenter"));
 const TeacherAssistant = lazy(() => import("./pages/TeacherAssistant"));
 const AnalyticsCenter = lazy(() => import("./pages/AnalyticsCenter"));
 const GradingWizard = lazy(() => import("./grading-wizard/GradingWizard"));
+const ErrorNoteModule = lazy(() => import("./pages/ErrorNote"));
+const AITutor = lazy(() => import("./pages/AITutor"));
+const ModelSettings = lazy(() => import("./pages/ModelSettings"));
+const Summary = lazy(() => import("./pages/Summary"));
+const Clips = lazy(() => import("./pages/Clips"));
 
 const { Header, Content, Footer } = Layout;
 const { Title, Paragraph, Text } = Typography;
 
-const NAV_ITEMS: NavItem[] = [
-  {
-    key: "dashboard",
-    label: "总览",
-    subtitle: "班级动态与重点提醒",
-    headerTitle: "教学总览",
-    headerDescription: "快速了解班级进度、作业状态与核心提醒，掌握教学节奏。",
-    path: "/dashboard",
-  },
-  {
-    key: "roster",
-    label: "班级管理",
-    subtitle: "维护教师与学生档案",
-    headerTitle: "班级与学生管理",
-    headerDescription: "维护班级结构、学生信息与教师配置，保障教学顺畅运行。",
-    path: "/roster",
-  },
-  {
-    key: "upload",
-    label: "试卷上传",
-    subtitle: "拍照或导入试卷",
-    headerTitle: "试卷上传与整理",
-    headerDescription: "上传纸质试卷或扫描件，系统自动完成识别、切割与预处理。",
-    path: "/upload",
-  },
-  {
-    key: "mistake",
-    label: "错题诊断",
-    subtitle: "复盘薄弱知识点",
-    headerTitle: "错题诊断中心",
-    headerDescription: "查看错题归档、知识点标签与复盘建议，帮助学生及时巩固。",
-    path: "/mistake",
-  },
-  {
-    key: "practice",
-    label: "练习中心",
-    subtitle: "生成针对性练习",
-    headerTitle: "练习任务中心",
-    headerDescription: "基于错题与薄弱知识点自动生成练习，并追踪完成情况。",
-    path: "/practice",
-  },
-  {
-    key: "assistant",
-    label: "智能助手",
-    subtitle: "问答与批改建议",
-    headerTitle: "智能教师助手",
-    headerDescription: "即时沟通教学问题，获取批改建议与高质量沟通模版。",
-    path: "/assistant",
-  },
-  {
-    key: "analytics",
-    label: "学习分析",
-    subtitle: "班级画像与趋势",
-    headerTitle: "学习数据分析",
-    headerDescription: "掌握班级知识掌握度、成绩趋势与能力分布，为教学决策提供依据。",
-    path: "/analytics",
-  },
-];
-
+// Flatten modules to get all items for routing
+const ALL_NAV_ITEMS = MODULES.flatMap(m => m.items);
 
 const ROUTE_COMPONENTS: Record<NavKey, NavComponent> = {
   dashboard: Dashboard,
@@ -111,15 +67,20 @@ const ROUTE_COMPONENTS: Record<NavKey, NavComponent> = {
   practice: PracticeCenter,
   assistant: TeacherAssistant,
   analytics: AnalyticsCenter,
+  note: ErrorNoteModule,
+  tutor: AITutor,
+  models: ModelSettings,
+  summary: Summary,
+  clips: Clips,
 };
 
-const ROUTE_BY_KEY: Record<NavKey, string> = NAV_ITEMS.reduce((acc, item) => {
+const ROUTE_BY_KEY: Record<NavKey, string> = ALL_NAV_ITEMS.reduce((acc, item) => {
   acc[item.key] = item.path;
   return acc;
 }, {} as Record<NavKey, string>);
 
 const deriveActiveKey = (pathname: string): NavKey => {
-  const matched = NAV_ITEMS.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`));
+  const matched = ALL_NAV_ITEMS.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`));
   return matched?.key ?? "dashboard";
 };
 
@@ -154,10 +115,11 @@ const AppLayout = () => {
   const navigate = useNavigate();
   const activeKey = useMemo(() => deriveActiveKey(location.pathname), [location.pathname]);
   const activeNavItem = useMemo(
-    () => NAV_ITEMS.find((item) => item.key === activeKey) ?? NAV_ITEMS[0],
+    () => ALL_NAV_ITEMS.find((item) => item.key === activeKey) ?? ALL_NAV_ITEMS[0],
     [activeKey],
   );
   const isWizardRoute = location.pathname.startsWith("/grading/wizard");
+  const isDashboard = activeKey === "dashboard"; // Dashboard 有自己的 Hero Section
   const lastCompactRef = useRef(isCompactLayout);
   const suspenseFallback = useMemo(
     () => (
@@ -352,33 +314,7 @@ const AppLayout = () => {
 
   if (isWizardRoute) {
     return (
-      <ConfigProvider
-        locale={zhCN}
-        theme={{
-          token: {
-            colorPrimary: "#2563eb",
-            borderRadiusLG: 18,
-            fontFamily: '"SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif',
-          },
-          components: {
-            Layout: {
-              headerBg: "transparent",
-              siderBg: "transparent",
-              bodyBg: "transparent",
-            },
-            Menu: {
-              colorItemBg: "transparent",
-              itemSelectedColor: "#1d4ed8",
-              itemSelectedBg: "rgba(37,99,235,0.12)",
-              itemHoverBg: "rgba(37,99,235,0.08)",
-              radiusItem: 12,
-            },
-            Button: {
-              borderRadius: 12,
-            },
-          },
-        }}
-      >
+      <ConfigProvider locale={zhCN} theme={appTheme}>
         <Suspense fallback={suspenseFallback}>
           <WizardProvider>
             <GradingWizard />
@@ -399,33 +335,14 @@ const AppLayout = () => {
   const footerClassName = isCompactLayout ? "app-footer app-footer--compact" : "app-footer";
 
   return (
-    <ConfigProvider
-      locale={zhCN}
-      theme={{
-        token: {
-          colorPrimary: "#2563eb",
-          borderRadiusLG: 18,
-          fontFamily: '"SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif',
-        },
-        components: {
-          Layout: {
-            headerBg: "transparent",
-            siderBg: "transparent",
-            bodyBg: "transparent",
-          },
-          Button: {
-            borderRadius: 12,
-          },
-        },
-      }}
-    >
+    <ConfigProvider locale={zhCN} theme={appTheme}>
       <Layout className={layoutClassName}>
         {!isCompactLayout && (
           <DesktopNav
             collapsed={collapsed}
             onCollapse={setCollapsed}
             activeKey={activeKey}
-            navItems={NAV_ITEMS}
+            modules={MODULES}
             onNavigate={handleNavigate}
             onFeedbackClick={handleFeedbackOpen}
           />
@@ -440,64 +357,63 @@ const AppLayout = () => {
                   icon={<MenuOutlined />}
                   onClick={() => setMobileNavOpen(true)}
                   aria-label="Open navigation menu"
+                  style={{ marginRight: 8 }}
                 />
               )}
-              <Space direction="vertical" size={4}>
-                <Text type="secondary" style={{ letterSpacing: isCompactLayout ? 0 : 1 }}>
-                  {isCompactLayout ? "Welcome back" : "WELCOME"}
-                </Text>
-                <Title level={isCompactLayout ? 4 : 3} style={{ margin: 0 }}>
-                  {activeNavItem.headerTitle}
-                </Title>
-                <Paragraph type="secondary" style={{ margin: 0 }}>
-                  {activeNavItem.headerDescription}
-                </Paragraph>
-              </Space>
-            </div>
-            <Space size={isCompactLayout ? 8 : 12} align="center">
-              {!isCompactLayout && user && (
-                <Text type="secondary" style={{ marginRight: 4 }}>
-                  {user.name}
-                </Text>
+              {/* Dashboard 有自己的 Hero Section，不在 Header 显示标题 */}
+              {!isDashboard && (
+                <div>
+                  <Title level={4} style={{ margin: 0, fontWeight: 600, letterSpacing: '-0.3px' }}>
+                    {activeNavItem.headerTitle}
+                  </Title>
+                </div>
               )}
+            </div>
+            <Space size={12} align="center">
               {llmStatus !== "unknown" && (
-                <Tag color={llmStatus === "available" ? "success" : "warning"}>
-                  {llmStatus === "available" ? "接口可用" : "待配置接口"}
+                <Tag 
+                  color={llmStatus === "available" ? "success" : "warning"}
+                  style={{ 
+                    margin: 0, 
+                    borderRadius: 6,
+                    fontWeight: 500,
+                  }}
+                >
+                  {llmStatus === "available" ? "API 可用" : "待配置"}
                 </Tag>
               )}
               <Button
                 icon={<ApiOutlined />}
                 onClick={() => setLlmConfigVisible(true)}
-                type={isCompactLayout ? "text" : "default"}
-                shape={isCompactLayout ? "circle" : undefined}
-                size={isCompactLayout ? "large" : "middle"}
+                type="text"
+                style={{ 
+                  color: '#6B7280',
+                  borderRadius: 8,
+                }}
                 aria-label="Configure API"
-              >
-                {!isCompactLayout && "Configure API"}
-              </Button>
-              {!isCompactLayout && (
-                <Button type="text" onClick={() => handleNavigate("dashboard")}>
-                  返回总览
-                </Button>
-              )}
+              />
               <Button
                 type="primary"
-                shape="round"
-                size={isCompactLayout ? "middle" : "large"}
+                size="middle"
                 onClick={() => handleNavigate("upload")}
+                style={{ 
+                  borderRadius: 8,
+                  fontWeight: 500,
+                  height: 36,
+                }}
               >
-                {isCompactLayout ? "上传试卷" : "开始上传"}
+                开始上传
               </Button>
               <Button
                 icon={<LogoutOutlined />}
                 onClick={logout}
-                type={isCompactLayout ? "text" : "default"}
-                shape={isCompactLayout ? "circle" : undefined}
-                size={isCompactLayout ? "large" : "middle"}
+                type="text"
+                style={{ 
+                  color: '#6B7280',
+                  borderRadius: 8,
+                }}
                 aria-label="退出登录"
-              >
-                {!isCompactLayout && "退出登录"}
-              </Button>
+              />
             </Space>
           </Header>
           <Content className={contentClassName}>
@@ -505,10 +421,14 @@ const AppLayout = () => {
               <Suspense fallback={suspenseFallback}>
                 <Routes>
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                  {NAV_ITEMS.map((item) => {
-                    const Component = ROUTE_COMPONENTS[item.key];
-                    return <Route key={item.key} path={item.path} element={<Component />} />;
-                  })}
+                  <Route element={<ModuleLayout />}>
+                    {ALL_NAV_ITEMS.map((item) => {
+                      const Component = ROUTE_COMPONENTS[item.key];
+                      // 错题笔记有子路由，需要用 /* 匹配
+                      const routePath = item.key === "note" ? `${item.path}/*` : item.path;
+                      return <Route key={item.key} path={routePath} element={<Component />} />;
+                    })}
+                  </Route>
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </Suspense>
@@ -523,7 +443,7 @@ const AppLayout = () => {
             open={mobileNavOpen}
             onClose={() => setMobileNavOpen(false)}
             activeKey={activeKey}
-            navItems={NAV_ITEMS}
+            modules={MODULES}
             onNavigate={handleNavigate}
             onFeedbackClick={handleFeedbackOpen}
           />
@@ -621,4 +541,3 @@ const App: React.FC = () => (
 );
 
 export default App;
-

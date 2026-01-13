@@ -226,7 +226,7 @@ const StepAnswerReview = () => {
           answers,
         };
       })
-      .filter((item): item is { key: string; label: string; normalized?: string; answers: string[] } => !!item);
+      .filter((item): item is { key: string; label: string; normalized: string | undefined; answers: string[] } => !!item);
   }, [currentQuestion]);
   const confirmedCount = useMemo(
     () => questions.filter((question) => question.answer_status === "confirmed").length,

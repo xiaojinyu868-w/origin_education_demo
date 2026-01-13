@@ -6,6 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // 错题笔记 API - 保持 /api/v1/error 路径
+      "/api/v1/error": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+      // 其他 API - 移除 /api 前缀
       "/api": {
         target: "http://127.0.0.1:8000",
         changeOrigin: true,

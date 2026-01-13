@@ -1,39 +1,25 @@
 import {
-  ApartmentOutlined,
-  BarChartOutlined,
-  BookOutlined,
-  CheckCircleOutlined,
-  CloudUploadOutlined,
   CustomerServiceOutlined,
   HomeOutlined,
 } from "@ant-design/icons";
-import { Badge, Button, Drawer, FloatButton, Space, Typography } from "antd";
-import type { ReactNode } from "react";
-import type { NavKey, NavItem } from "../types/navigation";
+import { Badge, Button, Drawer, FloatButton, Space, Typography, Collapse } from "antd";
+import type { NavKey, NavModule } from "../types/navigation";
 
 const ICON_STYLE = { fontSize: 20 };
-
-const iconMap: Record<NavKey, ReactNode> = {
-  dashboard: <HomeOutlined style={ICON_STYLE} />,
-  roster: <ApartmentOutlined style={ICON_STYLE} />,
-  upload: <CloudUploadOutlined style={ICON_STYLE} />,
-  mistake: <BookOutlined style={ICON_STYLE} />,
-  practice: <CheckCircleOutlined style={ICON_STYLE} />,
-  analytics: <BarChartOutlined style={ICON_STYLE} />,
-  assistant: <CustomerServiceOutlined style={ICON_STYLE} />,
-};
 
 export type MobileNavProps = {
   open: boolean;
   onClose: () => void;
   activeKey: NavKey;
-  navItems: NavItem[];
+  modules: NavModule[];
   onNavigate: (key: NavKey) => void;
   onFeedbackClick: () => void;
 };
 
-const MobileNav = ({ open, onClose, activeKey, navItems, onNavigate, onFeedbackClick }: MobileNavProps) => {
-  const primaryItems = navItems.slice(0, 4);
+const MobileNav = ({ open, onClose, activeKey, modules, onNavigate, onFeedbackClick }: MobileNavProps) => {
+  // Use Dashboard module's items for quick access if available
+  const dashboardModule = modules.find(m => m.key === "dashboard");
+  const quickItems = dashboardModule ? dashboardModule.items : [];
 
   const handleNavigate = (key: NavKey) => {
     onNavigate(key);
@@ -43,12 +29,17 @@ const MobileNav = ({ open, onClose, activeKey, navItems, onNavigate, onFeedbackC
   return (
     <>
       <FloatButton.Group shape="circle" style={{ right: 20, bottom: 20 }} icon={<HomeOutlined />} aria-label="快捷导航">
-        {primaryItems.map((item) => (
+        {quickItems.map((item) => (
           <FloatButton
             key={item.key}
             tooltip={item.label}
-            icon={iconMap[item.key]}
-            type={activeKey === item.key ? "primary" : "default"}
+            // Need to map icons somehow if they are not in item definition or fallback
+            // In new structure, items don't have icons explicitly in the definition in ModuleLayout unless added?
+            // Wait, in ModuleLayout.tsx I didn't add icons to sub-items, only to modules.
+            // Let's just use the module icon or a default.
+            // Actually, for mobile float button, maybe just showing "Feedback" and "Dashboard" is enough?
+            // Or let's just show the first item of each module?
+            // Let's stick to Feedback for now to keep it simple as quickItems might not have icons.
             onClick={() => handleNavigate(item.key)}
             aria-label={item.label}
           />
@@ -66,8 +57,8 @@ const MobileNav = ({ open, onClose, activeKey, navItems, onNavigate, onFeedbackC
         placement="left"
         onClose={onClose}
         width="80%"
-        bodyStyle={{ padding: "24px 16px 32px" }}
-        headerStyle={{ borderBottom: "none" }}
+        bodyStyle={{ padding: "0" }}
+        headerStyle={{ borderBottom: "none", padding: "24px 16px 12px" }}
         title={
           <Space direction="vertical" size={4}>
             <Typography.Title level={4} style={{ margin: 0 }}>
@@ -77,44 +68,43 @@ const MobileNav = ({ open, onClose, activeKey, navItems, onNavigate, onFeedbackC
           </Space>
         }
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          {navItems.map((item) => {
-            const selected = activeKey === item.key;
-            const isPrimary = primaryItems.some((primary) => primary.key === item.key);
-            return (
-              <Button
-                key={item.key}
-                type={selected ? "primary" : "text"}
-                onClick={() => handleNavigate(item.key)}
-                block
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-start",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "12px 14px",
-                }}
-                icon={
-                  isPrimary ? (
-                    iconMap[item.key]
-                  ) : (
-                    <Badge dot={item.key === "assistant"}>{iconMap[item.key]}</Badge>
-                  )
-                }
-              >
-                <Space direction="vertical" size={2} style={{ alignItems: "flex-start" }}>
-                  <Typography.Text strong>{item.label}</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {item.subtitle}
-                  </Typography.Text>
+        <div style={{ padding: "0 16px 24px" }}>
+          <Collapse
+            ghost
+            accordion
+            defaultActiveKey={modules.find(m => m.items.some(i => i.key === activeKey))?.key}
+            items={modules.map(module => ({
+              key: module.key,
+              label: (
+                <Space>
+                  {module.icon}
+                  <Typography.Text strong>{module.label}</Typography.Text>
                 </Space>
-              </Button>
-            );
-          })}
-        </Space>
+              ),
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                   {module.items.map(item => (
+                     <Button
+                       key={item.key}
+                       type={activeKey === item.key ? "primary" : "text"}
+                       block
+                       style={{ justifyContent: 'flex-start', paddingLeft: 32 }}
+                       onClick={() => handleNavigate(item.key)}
+                     >
+                       <Space direction="vertical" size={0} align="start">
+                         <Typography.Text style={{ color: activeKey === item.key ? 'inherit' : undefined }}>{item.label}</Typography.Text>
+                         <Typography.Text type="secondary" style={{ fontSize: 11, color: activeKey === item.key ? 'rgba(255,255,255,0.8)' : undefined }}>{item.subtitle}</Typography.Text>
+                       </Space>
+                     </Button>
+                   ))}
+                </Space>
+              )
+            }))}
+          />
+        </div>
 
-        <div style={{ marginTop: 24 }}>
-          <Button block type="default" size="large" onClick={onFeedbackClick}>
+        <div style={{ padding: "0 16px 24px" }}>
+          <Button block type="default" size="large" onClick={onFeedbackClick} icon={<CustomerServiceOutlined />}>
             提交反馈
           </Button>
         </div>

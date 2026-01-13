@@ -646,7 +646,7 @@ export const WizardProvider = ({ children }: WizardProviderProps) => {
       try {
         let session = await ensureSession(teacherId, {
           step,
-          examId: nextSelectedExamId ?? snapshot.session?.exam_id,
+          examId: nextSelectedExamId ?? snapshot.session?.exam_id ?? undefined,
           payload: options.payload,
         });
 

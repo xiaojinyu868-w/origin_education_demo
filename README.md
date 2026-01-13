@@ -1,6 +1,30 @@
 ﻿# 智慧批改与学情分析平台
 
 端到端解决方案，覆盖试卷上传、智能批改、错题归档、个性化练习生成以及数据分析展示。后端基于 FastAPI/SQLModel，前端使用 Vite + React + Ant Design，界面与交互均为中文，适合直接交付学校进行试点测试。
+
+## v2.0 新特性 (meetmind 对齐升级)
+
+### 多模型 LLM 服务
+- **通义千问** (qwen3-vl-plus) - 支持多模态视觉理解
+- **Google Gemini** (gemini-3-pro) - 高性能推理
+- **OpenAI** (gpt-5.2) - 强大的语言理解能力
+- 统一的 LLM Provider 抽象层，支持无缝切换
+
+### AI 家教系统
+- 智能对话辅导，帮助解答学习困惑
+- 流式响应，实时显示 AI 回复
+- 多模态支持，可上传图片进行题目解析
+- 引导式问题生成
+
+### 课堂内容处理
+- **课堂摘要**：自动生成课堂内容摘要和关键知识点
+- **精选片段**：提取课堂精华内容，支持收藏和分享
+- 时间线视图，直观展示课堂结构
+
+### JWT 认证体系
+- 安全的 Token 认证机制
+- 用户角色权限管理 (student/parent/teacher/admin)
+- 刷新令牌支持
 ## 原始需求
 教师真实需求总结
 🎯 核心目标
@@ -82,7 +106,22 @@ backend/
     main.py              # FastAPI 路由（中文提示与演示接口）
     models.py            # SQLModel 数据模型
     schemas.py           # Pydantic 数据结构
-    services/            # OCR、自动批改、练习生成、分析等业务模块
+    services/            # 业务模块
+      llm_provider/      # 多模型 LLM 服务层
+        base.py          # LLM Provider 抽象基类
+        qwen.py          # 通义千问实现
+        gemini.py        # Google Gemini 实现
+        openai_provider.py # OpenAI 实现
+        factory.py       # Provider 工厂
+      auth/              # JWT 认证服务
+        service.py       # 认证服务实现
+        types.py         # 用户角色权限类型
+    api/v1/              # API v1 路由
+      tutor.py           # AI 家教接口
+      chat.py            # 通用对话接口
+      summary.py         # 课堂摘要接口
+      topics.py          # 精选片段接口
+      auth_routes.py     # 认证路由
     sample_data.py       # 演示数据构建脚本
   requirements.txt       # Python 依赖
 frontend/
@@ -90,18 +129,43 @@ frontend/
   vite.config.ts         # Vite 配置（反向代理到后端）
   src/
     App.tsx              # 全局布局与导航
-    pages/               # 仪表盘、配置、上传、错题、练习、分析页面
-    components/          # 批改结果抽屉等复用组件
+    api/
+      meetmind.ts        # meetmind 对齐的 API 服务
+    pages/
+      AITutor/           # AI 家教对话页面
+      ModelSettings/     # 模型设置页面
+      Summary/           # 课堂摘要页面
+      Clips/             # 精选片段页面
+      Dashboard/         # 仪表盘
+      ...                # 其他页面
+    components/          # 复用组件
     styles/              # 自定义全局样式
 ```
 
 ## 大模型配置
-调用通义千问大模型需要在运行环境中配置以下变量：
 
-- `DASHSCOPE_API_KEY`：必填，用于认证 DashScope 兼容接口。
-- `QWEN_VL_MODEL`：可选，默认为 `qwen3-vl-plus`。
-- `QWEN_TEXT_MODEL`：可选，默认为 `qwen-max`。
-- `QWEN_BASE_URL`：可选，默认指向 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
+### 多模型支持 (v2.0)
+系统支持多个 LLM 提供商，可根据需求灵活切换：
+
+**通义千问 (推荐)**
+- `DASHSCOPE_API_KEY`：必填，用于认证 DashScope 接口
+- `QWEN_VL_MODEL`：可选，默认为 `qwen3-vl-plus`
+- `QWEN_TEXT_MODEL`：可选，默认为 `qwen-max`
+- `QWEN_BASE_URL`：可选，默认指向 `https://dashscope.aliyuncs.com/compatible-mode/v1`
+
+**Google Gemini**
+- `GEMINI_API_KEY`：Gemini API 密钥
+- `GEMINI_MODEL`：可选，默认为 `gemini-3-pro`
+
+**OpenAI**
+- `OPENAI_API_KEY`：OpenAI API 密钥
+- `OPENAI_MODEL`：可选，默认为 `gpt-5.2`
+- `OPENAI_BASE_URL`：可选，支持自定义端点
+
+**JWT 认证配置**
+- `JWT_SECRET`：JWT 签名密钥（生产环境必须修改）
+- `ACCESS_TOKEN_EXPIRE_MINUTES`：访问令牌过期时间，默认 120 分钟
+- `REFRESH_TOKEN_EXPIRE_DAYS`：刷新令牌过期时间，默认 7 天
 
 未配置密钥时系统会自动回退至 EasyOCR 与手动评分流程。
 
@@ -112,7 +176,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate         # Windows
 pip install -r requirements.txt
-uvicorn app.main:app --reload   # 默认监听 127.0.0.1:8000
+python -m uvicorn app.main:app --reload   # 默认监听 127.0.0.1:8000
 ```
 
 - 首次启动会自动创建 SQLite 数据库 `backend/app.db`。
@@ -122,7 +186,7 @@ uvicorn app.main:app --reload   # 默认监听 127.0.0.1:8000
 ```bash
 cd frontend
 npm install
-npm run dev                    # 默认访问 http://127.0.0.1:5173
+npx vite                       # 默认访问 http://127.0.0.1:5173
 ```
 Vite 已配置代理，前端访问 `/api/*` 会转发至 FastAPI。
 
@@ -141,13 +205,26 @@ Vite 已配置代理，前端访问 `/api/*` 会转发至 FastAPI。
 
 
 ## 接口速览
+
+### 核心业务接口
 - `POST /bootstrap/demo`：写入示例教师/班级/学生/考试数据。
 - `POST /bootstrap/clear`：清空数据库数据并删除生成的演示素材。
 - `POST /bootstrap/demo/refresh`：重置数据库并重新生成完整演示数据。
 - `POST /submissions/upload`：上传试卷图片并触发自动批改。
 - `GET /students/{id}/mistakes`：获取学生错题列表。
-  - `POST /practice` / `GET /practice` / `POST /practice/complete`：生成、查询、更新练习任务。
+- `POST /practice` / `GET /practice` / `POST /practice/complete`：生成、查询、更新练习任务。
 - `POST /analytics`：统计班级知识点正确率、平均分等指标。
+
+### v2.0 新增接口 (meetmind 对齐)
+- `POST /api/v1/tutor`：AI 家教对话（支持流式响应）
+- `GET /api/v1/chat`：获取可用模型列表
+- `POST /api/v1/chat`：通用 AI 对话
+- `POST /api/v1/generate-summary`：生成课堂摘要
+- `POST /api/v1/generate-topics`：生成精选片段
+- `POST /api/v1/auth/login`：用户登录
+- `POST /api/v1/auth/register`：用户注册
+- `POST /api/v1/auth/refresh`：刷新 Token
+- `GET /api/v1/auth/me`：获取当前用户信息
 
 ## 调优建议
 - **OCR 识别**：建议使用 150dpi 以上、光线均匀的扫描件。题号格式如 `1.` `2)` `3:` 均可识别。

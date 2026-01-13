@@ -1,0 +1,394 @@
+/* 错题笔记样式 */
+
+/* 通用 */
+.loadingContainer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background: #f5f5f5;
+}
+
+/* ========== 列表页 ========== */
+.container {
+  min-height: 100vh;
+  background: #f5f5f5;
+  padding: 16px;
+  padding-bottom: 80px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 16px;
+  background: white;
+  border-radius: 12px;
+}
+
+.noteCard {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.cardCover {
+  height: 160px;
+  overflow: hidden;
+  background: #f0f0f0;
+}
+
+.cardCover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cardTitle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cardDesc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.keyInsight {
+  color: #1890ff;
+  font-size: 13px;
+}
+
+.date {
+  font-size: 12px;
+}
+
+.fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 56px;
+  height: 56px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* ========== 新建页 ========== */
+.newContainer {
+  min-height: 100vh;
+  background: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+}
+
+.topNav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: white;
+  border-bottom: 1px solid #f0f0f0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 上传区域 */
+.uploadContainer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.uploader {
+  width: 100%;
+  max-width: 400px;
+}
+
+.uploadContent {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.uploadTitle {
+  margin-top: 16px;
+  font-size: 16px;
+  color: #333;
+}
+
+.uploadHint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #999;
+}
+
+/* 对话区域 */
+.chatContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+.imagePreview {
+  height: 150px;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.imagePreview img {
+  max-height: 100%;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.chatArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chatMessages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  display: flex;
+}
+
+.message.ai {
+  justify-content: flex-start;
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+.messageContent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 80%;
+}
+
+.aiAvatar {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.messageBubble {
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.message.ai .messageBubble {
+  background: #f5f5f5;
+  border-top-left-radius: 4px;
+}
+
+.message.user .messageBubble {
+  background: #1890ff;
+  color: white;
+  border-top-right-radius: 4px;
+}
+
+.inputArea {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #f0f0f0;
+  background: white;
+}
+
+.inputArea textarea {
+  flex: 1;
+}
+
+.actionArea {
+  padding: 16px;
+  border-top: 1px solid #f0f0f0;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.styleSelector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 生成中 */
+.generatingContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px;
+  text-align: center;
+}
+
+/* 完成 */
+.doneContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: #f5f5f5;
+}
+
+.noteImageWrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: white;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.noteImage {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.doneActions {
+  width: 100%;
+}
+
+/* ========== 详情页 ========== */
+.detailContainer {
+  min-height: 100vh;
+  background: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+}
+
+.detailContent {
+  flex: 1;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.noteImageContainer {
+  background: white;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.detailNoteImage {
+  max-width: 100%;
+  max-height: 50vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.saveButton {
+  width: 100%;
+  max-width: 300px;
+}
+
+.originalImageContainer {
+  background: white;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.originalImage {
+  max-width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.statusTag {
+  font-size: 14px;
+}
+
+.infoCard {
+  border-radius: 12px;
+}
+
+.chatCard {
+  border-radius: 12px;
+}
+
+.chatHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.historyMessage {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.historyMessage.user {
+  background: #e6f7ff;
+}
+
+.historyRole {
+  font-size: 12px;
+  color: #999;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.historyContent {
+  margin: 0 !important;
+  font-size: 14px;
+}
+
+/* 响应式 */
+@media (max-width: 576px) {
+  .header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  
+  .messageContent {
+    max-width: 90%;
+  }
+}

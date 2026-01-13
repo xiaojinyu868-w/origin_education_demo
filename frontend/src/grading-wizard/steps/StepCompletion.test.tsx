@@ -1,7 +1,7 @@
 import { MemoryRouter } from "react-router-dom";
 import { screen } from "@testing-library/react";
 import { renderWithWizard } from "../test-utils";
-import StepCompletion from "./StepCompletion.tsx";
+import StepCompletion from "./StepCompletion";
 
 const createExam = () => ({
   id: 1,

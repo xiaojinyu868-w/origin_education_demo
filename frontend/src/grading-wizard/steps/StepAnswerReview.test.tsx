@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { message } from "antd";
-import StepAnswerReview from "./StepAnswerReview.tsx";
+import StepAnswerReview from "./StepAnswerReview";
 import { renderWithWizard } from "../test-utils";
 
 const baseExam = () => ({

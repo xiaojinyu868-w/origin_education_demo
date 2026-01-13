@@ -291,7 +291,15 @@ def _serialize_processing_log(log: ProcessingLog) -> ProcessingLogRead:
     )
 
 
-app = FastAPI(title="AI-Assisted Exam Analytics Platform")
+app = FastAPI(
+    title="AI-Assisted Exam Analytics Platform",
+    description="与 meetmind 对齐的教育 AI 平台 API",
+    version="2.0.0",
+)
+
+# 注册 API v1 路由（与 meetmind 对齐）
+from .api.v1 import api_router
+app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
